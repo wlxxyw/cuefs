@@ -18,6 +18,7 @@ var placeholderRe = regexp.MustCompile(`\{num(?::(\d+)d?)?\}|\{title\}|\{ext\}`)
 
 // TrackFileName builds one track file name.
 func TrackFileName(template string, num int, title string, maxTitleLen int, ext string, taken map[string]int) string {
+	ext = NormaliseExtension(ext)
 	title = SanitizeTitle(title, maxTitleLen)
 	name := placeholderRe.ReplaceAllStringFunc(template, func(m string) string {
 		switch {
@@ -51,6 +52,18 @@ func TrackFileName(template string, num int, title string, maxTitleLen int, ext 
 	}
 	taken[name]++
 	return name
+}
+
+// NormaliseExtension keeps a leading dot on a configured output extension.
+func NormaliseExtension(ext string) string {
+	ext = strings.TrimSpace(strings.ToLower(ext))
+	if ext == "" {
+		return ".flac"
+	}
+	if !strings.HasPrefix(ext, ".") {
+		ext = "." + ext
+	}
+	return ext
 }
 
 func pad(n int, width string) string {

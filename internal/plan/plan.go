@@ -54,6 +54,8 @@ type Options struct {
 func (o *Options) defaults() {
 	if o.Extension == "" {
 		o.Extension = ".flac"
+	} else if !strings.HasPrefix(o.Extension, ".") {
+		o.Extension = "." + o.Extension
 	}
 	if o.NameTemplate == "" {
 		o.NameTemplate = "{num:02d} - {title}{ext}"

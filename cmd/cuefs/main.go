@@ -20,7 +20,7 @@ import (
 	"cuefs/internal/split"
 )
 
-const version = "0.1.0-m4"
+const version = "0.2.0-m2"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -38,6 +38,8 @@ func main() {
 		err = cmdSplit(args)
 	case "verify":
 		err = cmdVerify(args)
+	case "mount":
+		err = mountCmd(args)
 	case "retag":
 		err = cmdRetag(args)
 	case "flacinfo":
@@ -69,10 +71,11 @@ Commands:
   probe     Report how a cue file's encoding was detected and whether it parses
   scan      Classify every cue file under a directory (read-only)
   split     Materialise tracks + passthrough into an output tree
-  verify    Re-decode the produced tracks and compare PCM md5 against the source
-  retag     Rewrite the metadata stream of the generated tracks in place
-  flacinfo  Dump a FLAC file's metadata blocks and frame chain (no decoding)
-  dump      Print the parsed cue structure (tracks, times, tags)
+  verify     Re-decode the produced tracks and compare PCM md5 against the source
+  retag      Rewrite the metadata stream of the generated tracks in place
+  flacinfo   Dump a FLAC file's metadata blocks and frame chain (no decoding)
+  mount      Read-only FUSE overlay: src with tracks (Linux only)
+  dump       Print the parsed cue structure (tracks, times, tags)
   version   Print the version
 
 Run "cuefs <command> -h" for command flags.
@@ -672,8 +675,8 @@ func cmdSplit(args []string) error {
 	if err := c.load(); err != nil {
 		return err
 	}
-	if c.cfg.Split.OutputFormat != "flac" {
-		return fmt.Errorf("M1 can only generate FLAC output; set split.output_format to flac")
+	if c.cfg.Split.OutputFormat == "" {
+		return fmt.Errorf("set split.output_format to flac or wav")
 	}
 	o, err := c.options(w)
 	if err != nil {

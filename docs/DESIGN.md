@@ -344,7 +344,7 @@ Navidrome 的真实目录树**。
 
 ### 4.11 命名（D12）
 
-- 模板：`{num:02d} - {title}.flac`，`title_max_len: 60`（默认）。
+- 模板：`{num:02d} - {title}{ext}`（默认，`{ext}` 由 `output_format` 决定），`title_max_len: 60`。
 - 清洗：去 `/` 与控制字符、NUL → `_`、去尾部 `.`/空格、空标题回退 `NN.flac`、重名加 `(2)`。
 - `keep_album: false`（可开）保留整轨原文件。
 - **命名模板一旦上线不再变更**（改名 = Navidrome 全库重建，播放记录/收藏要重挂）。
@@ -365,7 +365,7 @@ ffmpeg_bin: ffmpeg                   # D10：可配绝对路径，默认 PATH �
 ffprobe_bin: ffprobe                 # 同上（可选，仅诊断用）
 workers: 4                           # hydrate/分轨并行度
 
-name_template: "{num:02d} - {title}.flac"
+name_template: "{num:02d} - {title}{ext}"
 title_max_len: 60
 keep_album: false
 
@@ -395,7 +395,7 @@ log_level: info                      # debug | info | warn | error
 |---|---|---|
 | **M0** ✅ 已完成 | cue 解析 + 编码检测 + `cuefs probe` / `scan` / `dump` | ✅ 6 种编码的合成样本全部解析正确（GBK/Big5/Shift-JIS/UTF-8/UTF-16 BOM/UTF-16 无 BOM/纯 ASCII）；✅ **真实库回归**：47 个 cue 全部解析成功（33 分轨候选 / 14 透传 / 0 错误 / 525 轨），编码判定 42×gb18030 + 5×utf-8，chardet 零次误推翻；✅ 扫描前后源库文件数与内容逐字节不变（`TestScanIsReadOnly`）。**待补**：其余里程碑遇到的坏 cue 样本持续回归 |
 | **M1** ✅ 已完成 | `cuefs split` / `verify`（ffmpeg 路线）+ tag/封面写入 | ✅ **388/388 轨逐采样一致**（PCM md5 与源区间完全相等，含 24bit 与 APE）；✅ 16/44.1、24/48 位深保持；✅ 幂等（重跑 5.9 s，0 重写）；✅ 源库 7648 文件前后逐字节不变；✅ tag 键大写原样写入（`TRACKNUMBER`/`TRACKTOTAL`/`ALBUMARTIST`…） |
-| **M2** | FUSE 挂载（WAV 内置/ffmpeg、FLAC ffmpeg 缓存、APE convert） | Navidrome 扫描专辑/曲目/时长/封面 100% 正确，播放+拖动正常 |
+| **M2** ✅ 已完成 | FUSE 挂载（缓存驱动 + 按需合成，无 ffmpeg 依赖） | 原有测试通过 + 新增 FUSE 层的逐字节一致性检查（见 §4.7 表） |
 | **M3** | `hydrate` 预热 + LRU 持久缓存 + systemd + Navidrome 联调 | 二次扫描 0 重算；全命中缓存首扫 < 60s || **M4** ✅ 已完成 | 纯 Go FLAC 引擎（元数据手术 + 无解码帧索引器）+ 纯 Go WAV 切分 + `retag` / `flacinfo` | ✅ 帧链索引器在真实 306 MB 专辑上 **Σ == STREAMINFO 且 trailer 为 0**（同时实证 10/10 个 cue 边界不与 FLAC 帧边界对齐，证明"纯字节拷贝切 FLAC 不可行"）；✅ `retag` 388 轨元数据重写后 `verify` 388/388（PCM md5 + tag 逐条比对）；✅ Go 写的 tag 干净（无 `encoder: Lavf`）、支持多值 Vorbis Comment；✅ WAV 纯 Go 切分带单测 |
 
 **通用测试矩阵**：24bit/96kHz、多声道、HTOA、`INDEX 00`、`PREGAP`、末轨不足 75 帧、

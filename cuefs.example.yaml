@@ -17,7 +17,7 @@ ffprobe_bin: ffprobe            # only used by diagnostics
 workers: 4                      # parallelism for hydrate/split
 
 # --- virtual file naming (decision D12) ----------------------------------
-name_template: "{num:02d} - {title}.flac"
+name_template: "{num:02d} - {title}{ext}"
 title_max_len: 60
 keep_album: false               # keep the source album file in the view
 

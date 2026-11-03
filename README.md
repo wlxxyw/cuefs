@@ -19,10 +19,10 @@ HOST                                   Navidrome container
 
 Everything that is not a cue-backed album file is passed through untouched.
 
-> **Status: M1 + M4 (splitting, verification, Go metadata engine).**
-> `split` already produces a library that Navidrome can index, and the FLAC
-> engine is now plain Go for everything but the audio-data movement. The full
-> design and decision log live in [`docs/DESIGN.md`](docs/DESIGN.md).
+> **Status: M1 + M4 + M2 (splitting, verification, Go metadata engine, FUSE).**
+> `cuefs mount` now presents the library as a read-only FUSE filesystem whose
+> per-track files are backed by the split cache. The full design and decision
+> log live in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Why not just use trackfs?
 
@@ -76,6 +76,38 @@ generated 10.0 GiB, passthrough 169.7 GiB, 0 warning(s), 0 error(s)
 ```console
 $ cuefs retag --src /music --out /mnt/music-split      # metadata only, no audio work
 33 album(s), 388 track(s): written 388, skipped 0, failed 0, cover(s) 0; passthrough 0 file(s)
+```
+
+## Mounting it (M2)
+
+`cuefs mount` attaches the library to a mount point. It reads the same tree as
+its source, hides the album file and the cue sheet of every split candidate,
+and exposes the tracks from the cache tree (the layout `split` writes). A
+cache entry that is not there yet is materialised on demand into that tree, so
+the mount point fills itself in as it is used (`--synthesize`).
+
+The mount spawns **no external binary by default**: WAV tracks are cut in pure
+Go (no decoder at all), and only FLAC/APE audio movement needs ffmpeg - and
+then only with `--synthesize` (and `ffmpeg_bin` set in the configuration).
+
+```console
+$ cuefs mount --config cuefs.yaml        # src/mount/cache from the config
+mounted : /mnt/music-split -> /srv/music (cache /var/lib/cuefs/cache)
+$ cd /mnt/music-split && ls "许巍.../在别处..."
+01 - 我的秋天.flac   04 - 树.flac         ...
+在别处.jpg           许巍 - 在别处.log     <== passthrough
+```
+
+Mount options: `--allow-other` (needs `user_allow_other` in `/etc/fuse.conf`),
+`--workers N` (cap on concurrent synthesis), `--fuse-opts "…"`. The overlay is
+read-only: `mkdir/unlink/rmdir/create/symlink/rename` are rejected.
+
+Then point Navidrome at the mount point:
+
+```yaml
+# docker-compose.yml (excerpt)
+volumes:
+  - /mnt/music-split:/music:ro
 ```
 
 ## Verifying (M1 acceptance)
@@ -225,6 +257,7 @@ $ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
 | **M0** ✅ | cue parser, encoding detection, `probe` / `scan` / `dump` |
 | **M1** ✅ | `cuefs split` via ffmpeg + sample-exact verification (`verify`) |
 | **M4** ✅ | pure-Go FLAC metadata engine + no-decode frame indexer (`flacinfo`, `retag`), pure-Go WAV splitting |
+| **M2** ✅ | read-only FUSE overlay (`mount`) backed by the split cache, self-hydrating on demand |
 | M2 | read-only FUSE overlay (passthrough + tracks), consumable by Navidrome |
 | M3 | `hydrate` pre-warming, persistent LRU cache, systemd unit, Navidrome bring-up |
 

@@ -320,43 +320,17 @@ func writeTrack(o Options, album *plan.Album, t *plan.Track, st *Stats) {
 		return
 	}
 
-	switch {
-	case isExt(album.SourcePath, ".wav") && isExt(out, ".wav"):
-		wav, err := audio.OpenWav(album.SourcePath)
-		if err != nil {
-			st.TracksFailed++
-			st.Errors++
-			o.Log("FAIL   : %s: %v", prettify(o, out), err)
-			return
-		}
-		if err := wav.Split(out, t.Start, t.End); err != nil {
-			st.TracksFailed++
-			st.Errors++
-			o.Log("FAIL   : %s: %v", prettify(o, out), err)
-			return
-		}
-	case isExt(out, ".flac"):
-		runner := engine.Runner{FfmpegBin: o.FfmpegBin, CompressionLevel: o.CompressionLevel}
-		if err := runner.Split(album.SourcePath, album.SampleRate, t, out); err != nil {
-			st.TracksFailed++
-			st.Errors++
-			st.Warnings++
-			o.Log("FAIL   : %s: %v", prettify(o, out), err)
-			return
-		}
-		if err := audio.WriteVorbisComment(out, toEntries(t.Tags)); err != nil {
-			st.Warnings++
-			o.Log("warning: %s tags: %v", prettify(o, out), err)
-		}
-	default:
-		runner := engine.Runner{FfmpegBin: o.FfmpegBin, CompressionLevel: o.CompressionLevel}
-		if err := runner.Split(album.SourcePath, album.SampleRate, t, out); err != nil {
-			st.TracksFailed++
-			st.Errors++
-			st.Warnings++
-			o.Log("FAIL   : %s: %v", prettify(o, out), err)
-			return
-		}
+	if err := engine.WriteTrack(album.SourcePath, album.SampleRate, t, out,
+		engine.Options{
+			FfmpegBin:        o.FfmpegBin,
+			CompressionLevel: o.CompressionLevel,
+			Extension:        o.Extension,
+		}); err != nil {
+		st.TracksFailed++
+		st.Errors++
+		st.Warnings++
+		o.Log("FAIL   : %s: %v", prettify(o, out), err)
+		return
 	}
 
 	if info, err := os.Stat(out); err == nil {
@@ -393,7 +367,7 @@ func Retag(o Options) (*Stats, error) {
 				o.Log("plan   : %s (%d tag entries)", prettify(o, out), len(t.Tags))
 				continue
 			}
-			if err := audio.WriteVorbisComment(out, toEntries(t.Tags)); err != nil {
+			if err := audio.WriteVorbisComment(out, engine.Entries(t.Tags)); err != nil {
 				st.TracksFailed++
 				st.Errors++
 				o.Log("FAIL   : %s: %v", prettify(o, out), err)
@@ -428,7 +402,7 @@ func checkTags(out string, tags []plan.Tag) string {
 			break
 		}
 	}
-	want := toEntries(tags)
+	want := engine.Entries(tags)
 	if len(entries) != len(want) {
 		return fmt.Sprintf("got %d entries, want %d", len(entries), len(want))
 	}
@@ -439,17 +413,6 @@ func checkTags(out string, tags []plan.Tag) string {
 		}
 	}
 	return ""
-}
-
-// toEntries maps the plan's tags onto Vorbis Comment entries, expanding the
-// multi-value keys into one entry per value.
-func toEntries(tags []plan.Tag) []audio.VorbisEntry {
-	expanded := plan.Expand(tags)
-	out := make([]audio.VorbisEntry, 0, len(expanded))
-	for _, t := range expanded {
-		out = append(out, audio.VorbisEntry{Key: t.Key, Value: t.Value})
-	}
-	return out
 }
 
 func isExt(path, want string) bool {

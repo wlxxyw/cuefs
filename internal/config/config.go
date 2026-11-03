@@ -81,7 +81,7 @@ func Defaults() *Config {
 		FfmpegBin:    "ffmpeg",
 		FfprobeBin:   "ffprobe",
 		Workers:      4,
-		NameTemplate: "{num:02d} - {title}.flac",
+		NameTemplate: "{num:02d} - {title}{ext}",
 		TitleMaxLen:  60,
 		KeepAlbum:    false,
 		Split: Split{

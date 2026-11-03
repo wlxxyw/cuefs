@@ -35,6 +35,18 @@ func (c *Config) Validate() error {
 	if c.TitleMaxLen < 1 {
 		return fmt.Errorf("title_max_len must be >= 1, got %d", c.TitleMaxLen)
 	}
+	// The template may hard-code an extension ("...{title}.flac") - that must
+	// match the output format, or people end up with misnamed files.
+	tpl := strings.ToLower(c.NameTemplate)
+	ext := strings.ToLower(c.Split.OutputFormat)
+	if !strings.Contains(tpl, "{ext}") {
+		switch {
+		case strings.Contains(tpl, ".flac") && ext != "flac":
+			return fmt.Errorf("name_template hard-codes .flac but split.output_format is %q; use {ext} in the template", ext)
+		case strings.Contains(tpl, ".wav") && ext != "wav":
+			return fmt.Errorf("name_template hard-codes .wav but split.output_format is %q; use {ext} in the template", ext)
+		}
+	}
 	if c.Split.Extensions == nil || len(c.Split.Extensions) == 0 {
 		return fmt.Errorf("split.extensions must not be empty")
 	}
