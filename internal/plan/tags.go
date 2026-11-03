@@ -25,10 +25,10 @@ var tagOrder = []string{
 	"CATALOGNUMBER", "COMMENT",
 }
 
-// memberSep is how a single key carrying several cue values is serialised.
-// ffmpeg writes one value per key, so a track that lists two performers
-// becomes 'ARTIST=A; B'. Navidrome accepts this convention for its
-// multi-artist handling.
+// MemberSep is how a single key carrying several cue values is serialised.
+// The ffmpeg writer records one value per key, so a track that lists two
+// performers becomes 'ARTIST=A; B'. FLAC's Vorbis Comment can hold several
+// values per key, and plan.Expand / audio.WriteVorbisComment use that.
 const memberSep = "; "
 
 // IgnoreTagsRe builds the matcher for cue.ignore_tags, whose entries are glob
@@ -142,6 +142,32 @@ func filterTags(t map[string][]string, ignore *regexp.Regexp) []Tag {
 			continue
 		}
 		out = append(out, Tag{Key: k, Value: joined})
+	}
+	return out
+}
+
+// MultiValueKeys are the keys where a cue sheet's "A; B" convention refers to
+// several values rather than to a value containing a semicolon. Only those
+// are split into multiple Vorbis Comment entries.
+var MultiValueKeys = map[string]bool{
+	"ARTIST": true, "ALBUMARTIST": true, "GENRE": true, "COMPOSER": true,
+	"PERFORMER": true, "CONDUCTOR": true, "LYRICIST": true, "MOOD": true,
+}
+
+// Expand turns each multi-value tag into one entry per value, so that a FLAC
+// writer can produce real multi-value comments instead of "A; B" strings.
+func Expand(tags []Tag) []Tag {
+	out := make([]Tag, 0, len(tags))
+	for _, tag := range tags {
+		if !MultiValueKeys[tag.Key] {
+			out = append(out, tag)
+			continue
+		}
+		for _, v := range strings.Split(tag.Value, memberSep) {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, Tag{Key: tag.Key, Value: v})
+			}
+		}
 	}
 	return out
 }

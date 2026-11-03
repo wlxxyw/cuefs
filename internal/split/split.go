@@ -298,7 +298,8 @@ func preloadCovers(o Options, albums []*plan.Album, st *Stats) {
 }
 
 // writeTrack produces one track and accounts for it in the worker's private
-// bucket.
+// bucket. FLAC output gets its metadata from Go (multi-value Vorbis
+// comments); a WAV source cut into WAV output needs no decoder at all.
 func writeTrack(o Options, album *plan.Album, t *plan.Track, st *Stats) {
 	if err := os.MkdirAll(album.OutDir, 0o755); err != nil {
 		st.Errors++
@@ -318,19 +319,141 @@ func writeTrack(o Options, album *plan.Album, t *plan.Track, st *Stats) {
 			prettify(o, out), album.CueBase(), t.Start)
 		return
 	}
-	runner := engine.Runner{FfmpegBin: o.FfmpegBin, CompressionLevel: o.CompressionLevel}
-	if err := runner.Split(album.SourcePath, album.SampleRate, t, out); err != nil {
-		st.TracksFailed++
-		st.Errors++
-		st.Warnings++
-		o.Log("FAIL   : %s: %v", prettify(o, out), err)
-		return
+
+	switch {
+	case isExt(album.SourcePath, ".wav") && isExt(out, ".wav"):
+		wav, err := audio.OpenWav(album.SourcePath)
+		if err != nil {
+			st.TracksFailed++
+			st.Errors++
+			o.Log("FAIL   : %s: %v", prettify(o, out), err)
+			return
+		}
+		if err := wav.Split(out, t.Start, t.End); err != nil {
+			st.TracksFailed++
+			st.Errors++
+			o.Log("FAIL   : %s: %v", prettify(o, out), err)
+			return
+		}
+	case isExt(out, ".flac"):
+		runner := engine.Runner{FfmpegBin: o.FfmpegBin, CompressionLevel: o.CompressionLevel}
+		if err := runner.Split(album.SourcePath, album.SampleRate, t, out); err != nil {
+			st.TracksFailed++
+			st.Errors++
+			st.Warnings++
+			o.Log("FAIL   : %s: %v", prettify(o, out), err)
+			return
+		}
+		if err := audio.WriteVorbisComment(out, toEntries(t.Tags)); err != nil {
+			st.Warnings++
+			o.Log("warning: %s tags: %v", prettify(o, out), err)
+		}
+	default:
+		runner := engine.Runner{FfmpegBin: o.FfmpegBin, CompressionLevel: o.CompressionLevel}
+		if err := runner.Split(album.SourcePath, album.SampleRate, t, out); err != nil {
+			st.TracksFailed++
+			st.Errors++
+			st.Warnings++
+			o.Log("FAIL   : %s: %v", prettify(o, out), err)
+			return
+		}
 	}
+
 	if info, err := os.Stat(out); err == nil {
 		st.TrackBytes += uint64(info.Size())
 	}
 	st.TracksWritten++
 	o.Log("write  : %s", prettify(o, out))
+}
+
+// Retag rewrites the metadata stream of the generated tracks in place. The
+// audio is left untouched, which makes it the cheap way to upgrade a library
+// that was split by an older cuefs (or by ffmpeg's tag writer).
+func Retag(o Options) (*Stats, error) {
+	o.defaults()
+	st := &Stats{}
+	p, err := BuildPlan(o)
+	if err != nil {
+		return st, err
+	}
+	st.Albums = len(p.Albums)
+	for _, a := range p.Albums {
+		st.Tracks += len(a.Tracks)
+	}
+	for _, a := range p.Albums {
+		for _, t := range a.Tracks {
+			out := filepath.Join(a.OutDir, t.Name)
+			info, err := os.Stat(out)
+			if err != nil || !info.Mode().IsRegular() {
+				o.Log("skip   : %s (missing)", prettify(o, out))
+				st.TracksSkipped++
+				continue
+			}
+			if o.Dry {
+				o.Log("plan   : %s (%d tag entries)", prettify(o, out), len(t.Tags))
+				continue
+			}
+			if err := audio.WriteVorbisComment(out, toEntries(t.Tags)); err != nil {
+				st.TracksFailed++
+				st.Errors++
+				o.Log("FAIL   : %s: %v", prettify(o, out), err)
+				continue
+			}
+			st.TrackBytes += uint64(info.Size())
+			st.TracksWritten++
+			o.Log("write  : %s", prettify(o, out))
+		}
+	}
+	return st, nil
+}
+
+// checkTags compares a produced FLAC's Vorbis Comment with the plan. Only
+// FLAC outputs carry Vorbis comments; the check is skipped for anything else
+// (a WAV output has no metadata stream of its own).
+func checkTags(out string, tags []plan.Tag) string {
+	if !isExt(out, ".flac") {
+		return ""
+	}
+	blocks, _, _, err := audio.ReadMetaBlocks(out)
+	if err != nil {
+		return err.Error()
+	}
+	var entries []audio.VorbisEntry
+	for _, b := range blocks {
+		if b.Kind == audio.BlockVorbisComment {
+			_, entries, err = audio.DecodeVorbisComment(b.Data)
+			if err != nil {
+				return err.Error()
+			}
+			break
+		}
+	}
+	want := toEntries(tags)
+	if len(entries) != len(want) {
+		return fmt.Sprintf("got %d entries, want %d", len(entries), len(want))
+	}
+	for i := range want {
+		if entries[i] != want[i] {
+			return fmt.Sprintf("entry %d is %s=%q, want %s=%q",
+				i, entries[i].Key, entries[i].Value, want[i].Key, want[i].Value)
+		}
+	}
+	return ""
+}
+
+// toEntries maps the plan's tags onto Vorbis Comment entries, expanding the
+// multi-value keys into one entry per value.
+func toEntries(tags []plan.Tag) []audio.VorbisEntry {
+	expanded := plan.Expand(tags)
+	out := make([]audio.VorbisEntry, 0, len(expanded))
+	for _, t := range expanded {
+		out = append(out, audio.VorbisEntry{Key: t.Key, Value: t.Value})
+	}
+	return out
+}
+
+func isExt(path, want string) bool {
+	return strings.EqualFold(filepath.Ext(path), want)
 }
 
 // extractCover pulls the first embedded picture into the album's directory.
@@ -531,6 +654,10 @@ func Verify(o Options) (*VerifyStats, error) {
 				} else {
 					st.Checked++
 					o.Log("ok     : %s", prettify(o, c.out))
+					if terr := checkTags(c.out, c.track.Tags); terr != "" {
+						st.Failed++
+						o.Log("FAIL   : %s tags: %s", prettify(o, c.out), terr)
+					}
 				}
 				mu.Unlock()
 			}

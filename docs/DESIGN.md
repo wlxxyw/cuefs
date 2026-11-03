@@ -162,65 +162,80 @@ EUC-JP → 推翻（100 vs 10）；Big5 → 顺序首選即 big5，无需推翻�
   因此**配置顺序 + `probe` 可视化**是主要手段；EUC-KR 自动识别不可靠，
   需要时用 `encoding` 或 `encoding_list` 显式指定。
 
-### 4.3 分轨引擎（三档）—— M1 已实现并实测
+### 4.3 分轨引擎（三档）—— M1(audio)+M4(元数据/索引) 已实现并实测
 
-M1 统一走 ffmpeg，最终形态（已逐字节验证）：
+**FLAC/WAV/FLAC-out 的音频统一走 ffmpeg**，最终命令形态（逐字节验证过）：
 
 ```
-ffmpeg -ss <floor(seconds)> -i SRC \
-       -map 0:a:0 -vn -map_metadata -1 -map_chapters -1 \
-       -af "atrim=start_sample=R[:end_sample=R+LEN],asetpts=PTS-STARTPTS" \
-       -t <LEN/rate + 1s> \
-       -c:a flac -f flac -compression_level 5 \
-       -metadata KEY=value ... \
-       <out>.part        # 写完改名，中断不会留下半截文件
+ffmpeg -ss <floor(seconds)> -i SRC        -map 0:a:0 -vn -map_metadata -1 -map_chapters -1        -af "atrim=start_sample=R[:end_sample=R+LEN],asetpts=PTS-STARTPTS"        -t <LEN/rate + 1s>        -c:a flac -f flac -compression_level 5        <out>.part        # 写完改名，中断不会留下半截文件
 ```
 
-其中 `R = start - floor(seconds)×rate`，`LEN = end - start`（末轨无 end，
-`atrim` 只给 `start_sample`，自然切到 EOF）。
+其中 `R = start - floor(seconds)*rate`，`LEN = end - start`（末轨无 end，
+`atrim` 只给 `start_sample`，自然切到 EOF）。**tag 不由 ffmpeg 写**：cuefs 自己
+在 Go 里重写元数据（见下），这样可以表达真正的多值 Vorbis Comment。
 
 **已实测的精确性结论**（远端 ffmpeg d90e3a1 / lavf 62.12.102）：
 
 | 检查 | 结果 |
 |---|---|
-| `atrim=start_sample/end_sample`（整数采样） + FLAC 重编码 | **逐采样精确**（PCM md5 与源区间一致） |
-| 16-bit/44.1k FLAC | 精确；速度约 4 s / 4 分钟轨 |
+| `atrim=start_sample/end_sample`（整数采样）+ FLAC 重编码 | **逐采样精确**（PCM md5 与源区间一致） |
+| 16-bit/44.1k FLAC | 精确；约 4 s / 4 分钟轨 |
 | 24-bit/48k FLAC（`s32 (24 bit)`） | 精确，**位深保持** |
-| 输入侧 `-ss`（整数秒） | 精确（md5 与 atrim 基线一致） |
-| 输入侧 `-ss`（**分数秒**，`%.20g`） | 精确（FLAC 与 APE 均验证） |
-| 输入侧 `-t`（分数长度） | 精确（同上） |
-| APE 解码 | 可用（native 解码器），70 min 整轨 → FLAC 用时 74 s，**体积 45 MB → 470 MB**（约 10×，APE 压缩率极高的样本） |
+| 输入侧 `-ss`（整数秒 / **分数秒**）与 `-t`（分数长度） | 精确（FLAC 与 APE 均验证） |
+| APE 解码 | 可用（native）；70 min 整轨 → FLAC 用时 74 s，**体积 45 MB → 470 MB**（此样本 APE 压缩率异常高，值得复查文件本身） |
 
 实现要点：
 
 1. **`atrim` 是精确性的权威**，`-t`（+1s 冗余）只是让管线提前停止，
-   避免中段轨道解码到文件尾 —— 有它没它输出字节完全一致，但耗时差 ~5×；
+   避免中段轨道解码到文件尾 —— 有它没它输出字节完全一致，但耗时差 ~5x；
 2. 必须显式 `-f flac`：输出先写成 `.part`，扩展名猜不出 muxer；
-3. `-map 0:a:0` 只取第一条音轨，`-vn` 丢弃内嵌封面（封面走目录透传）；
-4. **`-metadata` 的键名按原样写入 Vorbis Comment**（实测 `TITLE`/`tracknumber`/
-   `ARTIST` 大小写原样保留；ffmpeg 回显时才做归一化）→ 我们完全掌控最终 tag 名，
-   全部用大写规范名，taglib/Navidrome 直接可读；
-5. `-map_metadata -1` 先清空继承的整轨 tag，再逐条写入（trackfs 的合并规则在
-   Go 侧完成，见 §2）；
-6. 多值 tag（`PERFORMER "A; B"`）用 `; ` 连接成单值 —— ffmpeg 每键只能写一个值，
-   Navidrome 接受该约定。
+3. `-map 0:a:0` 只取第一条音轨，`-vn` 丢弃内嵌封面（封面走目录透传）。
 
-> 成本说明：解码仍发生（M4 的 Go 帧级流拷贝才能做到零解码），但 `-ss` 起点寻址
-> + `-t` 提前停止，使每轨成本 ≈ 轨长 / (≈58× 实时)。525 轨全库约 7–10 分钟
-> （6 并发），一次性成本。
-
-| 格式 | M1（当前） | M2+（优化） | 输出 | 缓存 |
-|---|---|---|---|---|
-| FLAC | ffmpeg **解码重编码**（样本精确） | 纯 Go 帧级流拷贝 | `.flac` | 需要 |
-| WAV | ffmpeg `-c copy`（无损字节精确） | 纯 Go 内置（RIFF 头重写 + 字节拷贝，零 CPU） | `.flac`/`.wav` 可配 | 不需要 |
-| APE | ffmpeg **解码重编码** → FLAC（无损） | 同左（帧间有依赖，无法流拷贝） | `.flac` | 必须 |
-
-> **为什么 FLAC 不能用 `-c copy`**：cue 时间是 CD 帧（1/75 s = 588 @44.1k），
+> 为什么 FLAC 不用 `-c copy`：cue 时间是 CD 帧（1/75 s = 588 @44.1k），
 > 与 FLAC 帧边界不对齐；`-c copy` 会 seek 到最近帧边界，轨边界误差可达一帧
-> （4096 采样 ≈ 93 ms），连播会有可闻的重叠/缺口。故 M1 对 FLAC 一律解码重编码。
-> M4 的 Go 帧级方案才解决"零 CPU 零额外空间"。
+> （4096 采样 ≈ 93 ms），连播会有可闻的重叠/缺口。另外 M1 曾用 ffmpeg 的
+> `-metadata` 写 tag；M4 起改为全由 Go 写（见 §4.3.1），多值键才能真正表达。
 
-配置项 `split.ape_mode: convert | hide | passthrough`（默认 `convert`）。
+#### 4.3.1 M4：纯 Go FLAC 引擎（元数据手术 + 帧索引器）
+
+`internal/audio`：
+
+- **`ReadMetaBlocks` / `WriteVorbisComment`**：元数据手术。只重写元数据块、
+  原样拷贝帧数据；多值键（`ARTIST/GENRE/...`，见 `plan.MultiValueKeys`）写成
+  多条 Vorbis Comment；`encoder: Lavf` 这类噪音消失；PADDING 收敛到 4 KiB
+  （保留以备未来就地改 tag）；原子重写（.part + rename）。
+  → `cuefs retag` 只重写元数据（不碰音频），实测 388 轨 / 10 GiB 用时 6:49
+  （I/O 为主），之后 `verify` 388/388 通过（PCM md5 + **tag 逐条比对**）。
+- **`IndexFlacFrames`**：无解码的帧索引器。解析帧头（CRC-8 校验）→ 用整帧
+  CRC-16 确认帧边界 → 严格递推的帧链（复杂度 O(file)，实测 30,850 帧 / 306 MB
+  约 5 s）。附带 STREAMINFO 解析、RF64/RIFF 的 WAV 解析与纯 Go 切分
+  （`internal/audio/wav.go`，按 BlockAlign 字节切片，**零解码零 CPU**，
+  单测覆盖；本库没有 WAV 整轨样本）。
+- **实证**：《许巍 - 在别处》（306 MB / 30,850 帧 / 41 分钟）：
+
+```
+  case size   : 3696..4096 samples       <- 末帧是短帧(bsCode 7, 显式 3696)
+  total samples: 126361200 (frame chain) == 126361200 (STREAMINFO)   <- 一致
+trailer : 0 byte(s) after the last frame
+  01  start          0 -> frame 1/30850   aligned
+  02  start   12083400 -> frame 2951  off by 200 sample(s) (4.5 ms)
+  ...
+  10  start  114887556 -> frame 28049  off by 2948 sample(s) (66.8 ms)
+```
+
+  帧链 Σ == STREAMINFO 且 trailer == 0 → 索引器逐帧解析正确（含"块大小码
+  0000 与 1000-1111 都表示'取自 STREAMINFO'"这一实现细节，由 Σ 一致性实证）。
+
+**M4 的关键结论（决定 FLAC 路线）**：同一报告同时给出
+"cue 边界是否落在帧边界"，实测 **10/10 个 cue 边界都不落在 FLAC 帧边界上**
+（偏差 1144..3472 采样 ≈ 25–79 ms）。这正是"纯字节拷贝切 FLAC 不可行"的
+数据证据：不对边界帧重编码的话，轨内会带入前/后一轨 25–79 ms 的音频。
+
+因此 M4 的"零 CPU"只有 **WAV 逐字节可达**；FLAC 保留 ffmpeg 解码重编码，
+但元数据完全交给 Go，并产出帧索引器作为 **FUSE 流式合成的地基（M2 复用）**。
+
+配置项 `split.ape_mode: convert | hide | passthrough`（默认 `convert`），
+`split.compression_level: 0-8`（默认 5）。
 
 ### 4.4 Plan 与尺寸一致性（trackfs 最大硬伤的修正）
 
@@ -356,7 +371,7 @@ keep_album: false
 
 split:
   extensions: [".flac", ".wav", ".ape"]
-  output_format: flac                # flac | wav（M1 只生成 flac）
+  output_format: flac                # flac | wav（wav 输出仅支持 WAV 源，纯 Go 零 CPU）
   ape_mode: convert                  # convert | hide | passthrough
   compression_level: 5               # FLAC 压缩等级 0-8（交给 ffmpeg）
 
@@ -381,7 +396,7 @@ log_level: info                      # debug | info | warn | error
 | **M0** ✅ 已完成 | cue 解析 + 编码检测 + `cuefs probe` / `scan` / `dump` | ✅ 6 种编码的合成样本全部解析正确（GBK/Big5/Shift-JIS/UTF-8/UTF-16 BOM/UTF-16 无 BOM/纯 ASCII）；✅ **真实库回归**：47 个 cue 全部解析成功（33 分轨候选 / 14 透传 / 0 错误 / 525 轨），编码判定 42×gb18030 + 5×utf-8，chardet 零次误推翻；✅ 扫描前后源库文件数与内容逐字节不变（`TestScanIsReadOnly`）。**待补**：其余里程碑遇到的坏 cue 样本持续回归 |
 | **M1** ✅ 已完成 | `cuefs split` / `verify`（ffmpeg 路线）+ tag/封面写入 | ✅ **388/388 轨逐采样一致**（PCM md5 与源区间完全相等，含 24bit 与 APE）；✅ 16/44.1、24/48 位深保持；✅ 幂等（重跑 5.9 s，0 重写）；✅ 源库 7648 文件前后逐字节不变；✅ tag 键大写原样写入（`TRACKNUMBER`/`TRACKTOTAL`/`ALBUMARTIST`…） |
 | **M2** | FUSE 挂载（WAV 内置/ffmpeg、FLAC ffmpeg 缓存、APE convert） | Navidrome 扫描专辑/曲目/时长/封面 100% 正确，播放+拖动正常 |
-| **M3** | `hydrate` 预热 + LRU 持久缓存 + systemd + Navidrome 联调 | 二次扫描 0 重算；全命中缓存首扫 < 60s || **M4**（可选） | 纯 Go FLAC 帧级流拷贝 + 内置 WAV 切分 | 零 CPU 零额外空间；样本仍逐字节相等 |
+| **M3** | `hydrate` 预热 + LRU 持久缓存 + systemd + Navidrome 联调 | 二次扫描 0 重算；全命中缓存首扫 < 60s || **M4** ✅ 已完成 | 纯 Go FLAC 引擎（元数据手术 + 无解码帧索引器）+ 纯 Go WAV 切分 + `retag` / `flacinfo` | ✅ 帧链索引器在真实 306 MB 专辑上 **Σ == STREAMINFO 且 trailer 为 0**（同时实证 10/10 个 cue 边界不与 FLAC 帧边界对齐，证明"纯字节拷贝切 FLAC 不可行"）；✅ `retag` 388 轨元数据重写后 `verify` 388/388（PCM md5 + tag 逐条比对）；✅ Go 写的 tag 干净（无 `encoder: Lavf`）、支持多值 Vorbis Comment；✅ WAV 纯 Go 切分带单测 |
 
 **通用测试矩阵**：24bit/96kHz、多声道、HTOA、`INDEX 00`、`PREGAP`、末轨不足 75 帧、
 多 FILE 多碟、GBK/Big5/UTF-16 编码 cue、坏 cue 不崩溃（报 warning 并透传原文件）。

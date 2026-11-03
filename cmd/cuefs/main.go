@@ -13,13 +13,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"cuefs/internal/audio"
 	"cuefs/internal/config"
 	"cuefs/internal/cue"
 	"cuefs/internal/library"
 	"cuefs/internal/split"
 )
 
-const version = "0.1.0-m1"
+const version = "0.1.0-m4"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -37,6 +38,10 @@ func main() {
 		err = cmdSplit(args)
 	case "verify":
 		err = cmdVerify(args)
+	case "retag":
+		err = cmdRetag(args)
+	case "flacinfo":
+		err = cmdFlacinfo(args)
 	case "dump":
 		err = cmdDump(args)
 	case "version", "--version", "-V":
@@ -65,6 +70,8 @@ Commands:
   scan      Classify every cue file under a directory (read-only)
   split     Materialise tracks + passthrough into an output tree
   verify    Re-decode the produced tracks and compare PCM md5 against the source
+  retag     Rewrite the metadata stream of the generated tracks in place
+  flacinfo  Dump a FLAC file's metadata blocks and frame chain (no decoding)
   dump      Print the parsed cue structure (tracks, times, tags)
   version   Print the version
 
@@ -441,6 +448,142 @@ func printJSON(v any) error {
 	return enc.Encode(v)
 }
 
+// cmdFlacinfo dumps a FLAC file's structure without decoding anything: the
+// metadata block chain, the frame chain (which must add up with STREAMINFO's
+// total_samples - that cross-check is what makes it a useful diagnostic) and,
+// optionally, how a cue sheet's track boundaries relate to the frame grid.
+func cmdFlacinfo(args []string) error {
+	fs := flag.NewFlagSet("flacinfo", flag.ContinueOnError)
+	cuePath := fs.String("cue", "", "cue sheet to check track boundary alignment against")
+	frames := fs.Int("frames", 0, "print the first N frames with their byte offsets")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("flacinfo needs exactly one .flac file")
+	}
+	path := fs.Arg(0)
+
+	blocks, si, framesOffset, err := audio.ReadMetaBlocks(path)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("file    : %s\n", path)
+	fmt.Println("blocks  :")
+	for _, b := range blocks {
+		fmt.Printf("  %-15s %7d byte(s) at %d last=%v\n", b.Name(), len(b.Data), b.Offset, b.Last)
+	}
+	fmt.Printf("frames  : metadata chain ends at %d\n", framesOffset)
+	idx, walkErr := audio.IndexFlacFrames(path)
+	if walkErr != nil {
+		fmt.Println("WARNING :", walkErr)
+	}
+	fmt.Printf("          walked %d frame(s), first frame starts at %d\n",
+		len(idx.Frames), idx.FramesOffset+idx.LeadingJunk)
+	if *frames > 0 {
+		n := *frames
+		if n > len(idx.Frames) {
+			n = len(idx.Frames)
+		}
+		for i := 0; i < n; i++ {
+			f := idx.Frames[i]
+			fmt.Printf("  frame %4d: offset %10d len %5d samples %5d start %10d (%s)\n",
+				i+1, f.Offset, f.Length, f.Samples, f.Start, f.Coding)
+		}
+	}
+	if idx.LeadingJunk != 0 {
+		fmt.Printf("  NOTE: %d stray byte(s) between the metadata chain and the first frame\n",
+			idx.LeadingJunk)
+	}
+	var sum int64
+	for _, f := range idx.Frames {
+		sum += int64(f.Samples)
+	}
+	if len(idx.Frames) > 0 {
+		fmt.Printf("  block size   : %d..%d samples\n", pmin(idx.Frames), pmax(idx.Frames))
+		fmt.Printf("  total samples: %d (frame chain), %d (STREAMINFO)\n", sum, si.TotalSamples)
+		if sum != si.TotalSamples {
+			fmt.Println("  MISMATCH between the frame chain and STREAMINFO")
+		}
+		if si.TotalSamples > 0 && si.SampleRate > 0 {
+			fmt.Printf("  duration     : %.3f s\n", float64(si.TotalSamples)/float64(si.SampleRate))
+		}
+	}
+	fmt.Printf("trailer : %d byte(s) after the last frame\n", idx.Trailer)
+
+	if *cuePath == "" {
+		return nil
+	}
+	sheet, err := cue.Load(*cuePath, cue.DetectOptions{Force: "auto"}, nil)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\ntrack boundaries vs frame grid (%d..%d samples per frame):\n",
+		pmin(idx.Frames), pmax(idx.Frames))
+	aligned := 0
+	for _, t := range sheet.AudioTracks() {
+		start, err := cue.Samples(t.Start, si.SampleRate)
+		if err != nil {
+			return err
+		}
+		i := frameContaining(idx.Frames, start)
+		fi := idx.Frames[i]
+		off := start - fi.Start
+		mark := "aligned"
+		if off != 0 {
+			mark = fmt.Sprintf("off by %d sample(s) (%.1f ms)",
+				off, 1000*float64(off)/float64(si.SampleRate))
+		} else {
+			aligned++
+		}
+		fmt.Printf("  %02d  start %10d -> frame %d/%d (%7d samples)  %s\n",
+			t.Num, start, i+1, len(idx.Frames), fi.Samples, mark)
+	}
+	if aligned == 0 {
+		fmt.Println("\nno cue boundary is frame-aligned, so a byte-for-byte FLAC split")
+		fmt.Println("cannot represent these tracks: the boundary frames have to be re-encoded.")
+	}
+	return nil
+}
+
+func pmin(f []audio.FlacFrame) int {
+	m := 0
+	for _, x := range f {
+		if m == 0 || x.Samples < m {
+			m = x.Samples
+		}
+	}
+	return m
+}
+
+func pmax(f []audio.FlacFrame) int {
+	m := 0
+	for _, x := range f {
+		if x.Samples > m {
+			m = x.Samples
+		}
+	}
+	return m
+}
+
+// frameContaining returns the index of the frame that holds the sample.
+func frameContaining(frames []audio.FlacFrame, sample int64) int {
+	lo, hi := 0, len(frames)-1
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if frames[mid].Start <= sample {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	if lo < 0 {
+		lo = 0
+	}
+	return lo
+}
+
 // --- split / verify --------------------------------------------------------
 
 // logf writes to stderr so that stdout keeps only the summary.
@@ -537,6 +680,29 @@ func cmdSplit(args []string) error {
 		return err
 	}
 	st, err := split.Materialize(o)
+	if err != nil {
+		return err
+	}
+	st.Report(os.Stdout)
+	return nil
+}
+
+// cmdRetag rewrites only the metadata stream of the generated tracks (no
+// audio work), which upgrades a library split by an older cuefs.
+func cmdRetag(args []string) error {
+	c, w := newWorkFlags("retag", true)
+	if err := c.fs.Parse(args); err != nil {
+		return err
+	}
+	if err := c.load(); err != nil {
+		return err
+	}
+	o, err := c.options(w)
+	if err != nil {
+		return err
+	}
+	o.Workers = 1 // metadata rewrite is I/O bound single task per file
+	st, err := split.Retag(o)
 	if err != nil {
 		return err
 	}

@@ -19,10 +19,10 @@ HOST                                   Navidrome container
 
 Everything that is not a cue-backed album file is passed through untouched.
 
-> **Status: M1 (splitting + verification).** `split` already produces a
-> library that Navidrome can index; the FUSE mount (M2) removes the need for
-> the materialised copy. The full design and the decision log live in
-> [`docs/DESIGN.md`](docs/DESIGN.md).
+> **Status: M1 + M4 (splitting, verification, Go metadata engine).**
+> `split` already produces a library that Navidrome can index, and the FLAC
+> engine is now plain Go for everything but the audio-data movement. The full
+> design and decision log live in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Why not just use trackfs?
 
@@ -61,6 +61,9 @@ generated 10.0 GiB, passthrough 169.7 GiB, 0 warning(s), 0 error(s)
   zero extra disk when source and output share a filesystem. Caveat: an
   output hardlink **is** the source file, so never write to the output tree.
   Without the flag everything is copied (mode and mtime preserved).
+* **Tags are written by cuefs itself**, not by ffmpeg, so multi-value keys
+  (`ARTIST`, `GENRE`, ...) become real multi-value Vorbis Comments and the
+  `encoder: Lavf...` noise is gone.
 * Idempotent: existing non-empty outputs are skipped, so re-running a
   388-track library takes seconds. `--force` rebuilds.
 * `--only <substring>` restricts a run to matching albums (plus all their
@@ -68,18 +71,18 @@ generated 10.0 GiB, passthrough 169.7 GiB, 0 warning(s), 0 error(s)
 * Writes are atomic (`*.part` + rename), so an interrupted run never leaves a
   truncated FLAC behind.
 
-Then point Navidrome at it:
+## Upgrading the metadata without re-splitting
 
-```yaml
-# docker-compose.yml (excerpt)
-volumes:
-  - /mnt/music-split:/music:ro
+```console
+$ cuefs retag --src /music --out /mnt/music-split      # metadata only, no audio work
+33 album(s), 388 track(s): written 388, skipped 0, failed 0, cover(s) 0; passthrough 0 file(s)
 ```
 
 ## Verifying (M1 acceptance)
 
 `verify` re-decodes every produced track and compares its PCM md5 against the
-source window the plan claims it came from:
+source window the plan claims it came from, then compares the Vorbis Comment
+entry by entry against the plan:
 
 ```console
 $ cuefs verify --src /music --out /mnt/music-split
@@ -90,6 +93,18 @@ checked 388 track(s): OK 388, FAILED 0, MISSING 0
 
 That is the strongest guarantee this tool can make: **sample-identical** to
 the source, including 24-bit sources and APE transcodes.
+
+## Inspecting a FLAC without decoding it
+
+```console
+$ cuefs flacinfo --cue <x.cue> <x.flac>   # metadata blocks + frame chain
+$ cuefs flacinfo --frames 6 <x.flac>      # + the first N frames' byte ranges
+```
+
+The frame chain must add up with STREAMINFO's total samples (that property is
+how the indexer is validated), and on a real album it reports that **cue
+boundaries never land on a FLAC frame boundary** - which is exactly why the
+boundary frames have to be re-encoded instead of byte-copied.
 
 ## Requirements
 
@@ -208,10 +223,10 @@ $ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
 | Milestone | Contents |
 |---|---|
 | **M0** ✅ | cue parser, encoding detection, `probe` / `scan` / `dump` |
-| **M1** ✅ | `cuefs split` via ffmpeg + tag/cover writing, sample-exact verification (`verify`) |
+| **M1** ✅ | `cuefs split` via ffmpeg + sample-exact verification (`verify`) |
+| **M4** ✅ | pure-Go FLAC metadata engine + no-decode frame indexer (`flacinfo`, `retag`), pure-Go WAV splitting |
 | M2 | read-only FUSE overlay (passthrough + tracks), consumable by Navidrome |
 | M3 | `hydrate` pre-warming, persistent LRU cache, systemd unit, Navidrome bring-up |
-| M4 | pure-Go FLAC frame-level splitting and built-in WAV splitting (zero CPU, zero extra space) |
 
 Acceptance criteria for each milestone are listed in
 [`docs/DESIGN.md` §6](docs/DESIGN.md).

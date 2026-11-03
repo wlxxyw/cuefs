@@ -51,13 +51,12 @@ func (r *Runner) SplitArgs(src string, rate int, t *plan.Track, out string) []st
 	}
 	args = append(args,
 		// The output is renamed to its final name afterwards, so the muxer
-		// cannot be guessed from the ".part" extension.
+		// cannot be guessed from the ".part" extension. Tags are NOT written
+		// here: the metadata stream is authored by cuefs itself so that
+		// multi-value Vorbis comments survive (DESIGN §4.3, M4).
 		"-c:a", "flac", "-f", "flac",
 		"-compression_level", strconv.Itoa(r.CompressionLevel),
 	)
-	for _, tag := range t.Tags {
-		args = append(args, "-metadata", tag.Key+"="+tag.Value)
-	}
 	return append(args, out)
 }
 
