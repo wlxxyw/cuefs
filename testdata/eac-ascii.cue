@@ -1,0 +1,20 @@
+REM GENRE Rock
+REM DATE 1998
+REM DISCID 9C0A1110
+REM COMMENT "ExactAudioCopy v1.6"
+REM TOTALDISCS 1
+PERFORMER "Some Band"
+TITLE "Some Album"
+FILE "Some Album.wav" WAVE
+  TRACK 01 AUDIO
+    TITLE "Opening"
+    PERFORMER "Some Band"
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    TITLE "Second Song"
+    PERFORMER "Some Band"
+    INDEX 01 04:33:12
+  TRACK 03 AUDIO
+    TITLE "Encore"
+    PERFORMER "Some Band"
+    INDEX 01 09:02:44

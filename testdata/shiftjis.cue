@@ -1,0 +1,10 @@
+REM DISCID C30A2E0D
+PERFORMER "テストバンド"
+TITLE "テストアルバム"
+FILE "album.flac" WAVE
+  TRACK 01 AUDIO
+    TITLE "一曲目"
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    TITLE "二曲目"
+    INDEX 01 04:12:33

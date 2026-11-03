@@ -1,0 +1,18 @@
+# build outputs
+/cuefs
+/cuefs.exe
+/bin/
+/dist/
+
+# test artefacts
+*.test
+*.out
+coverage.html
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# third-party reference checkout (not part of cuefs)
+/trackfs/

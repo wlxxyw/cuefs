@@ -1,0 +1,44 @@
+# cuefs example configuration (YAML, decision D9).
+# Copy to ~/.config/cuefs/cuefs.yaml or pass with --config <path>.
+# Every key is optional; absent keys keep the built-in defaults (DESIGN §5).
+
+# --- library layout -------------------------------------------------------
+src: /srv/music                 # source music root (required by `mount`)
+mount: /mnt/music-split         # mount point  (required by `mount`)
+
+# --- cache ----------------------------------------------------------------
+cache: ~/.local/share/cuefs/cache
+cache_max_gb: 20
+cache_ttl: 168h                 # Go duration string
+
+# --- external tools (decision D10) ---------------------------------------
+ffmpeg_bin: ffmpeg              # absolute path or a name resolved via PATH
+ffprobe_bin: ffprobe            # only used by diagnostics
+workers: 4                      # parallelism for hydrate/split
+
+# --- virtual file naming (decision D12) ----------------------------------
+name_template: "{num:02d} - {title}.flac"
+title_max_len: 60
+keep_album: false               # keep the source album file in the view
+
+# --- splitting (DESIGN §4.3) ---------------------------------------------
+split:
+  extensions: [".flac", ".wav", ".ape"]
+  output_format: flac           # flac | wav (M1 generates flac only)
+  ape_mode: convert             # convert | hide | passthrough (decision D14)
+  compression_level: 5          # FLAC compression level for ffmpeg (0-8)
+
+# --- cue sheets (DESIGN §4.1, §4.2) --------------------------------------
+cue:
+  encoding: auto                # auto, or a forced name such as gb18030
+  # Ordered candidates tried during detection (decision D11). When empty, or
+  # when every entry fails validation, the built-in order is used:
+  #   gb18030 -> big5 -> shift_jis -> euc-jp -> euc-kr -> windows-1252 -> windows-1251
+  encoding_list: []
+  # Per-directory override for libraries where detection is unreliable:
+  cue_overrides:
+    "/srv/music/old-rips": {encoding: big5}
+  # Tags never copied from the album file onto the generated tracks.
+  ignore_tags: ["CUE_TRACK*", "COMMENT"]
+
+log_level: info                 # debug | info | warn | error
