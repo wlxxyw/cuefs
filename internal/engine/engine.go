@@ -4,10 +4,12 @@
 package engine
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
 
+	"cuefs/internal/audio"
 	"cuefs/internal/plan"
 )
 
@@ -87,9 +89,10 @@ func (r *Runner) Split(src string, rate int, t *plan.Track, out string) error {
 	return nil
 }
 
-// MD5OfWindow is the reference decoder side of the verifier: it re-reads the
-// source with the same seek+trim combination and reports the PCM MD5. atrim
-// stays authoritative; -t only stops the pipeline early.
+// MD5OfWindow is the reference decoder side of the verifier. With
+// RefMode "auto" (the default) it uses ffmpeg when that binary is
+// configured - an *independent* implementation, which is what makes a
+// passing verify meaningful for the pure-Go path (DESIGN §4.3.1).
 func (r *Runner) MD5OfWindow(src string, rate int, t *plan.Track) (string, error) {
 	r.defaults()
 	offset, filter := t.AtrimSpec(rate)
@@ -103,6 +106,84 @@ func (r *Runner) MD5OfWindow(src string, rate int, t *plan.Track) (string, error
 		args = append(args, "-t", fmt.Sprintf("%.20g", length+1.0))
 	}
 	return runMD5(r.FfmpegBin, append(args, "-f", "md5", "-"))
+}
+
+// MD5OfWindowPure computes the source window's PCM md5 with the pure-Go
+// decoder (mewkiz). It is the fallback reference when no external binary is
+// configured - note that it then shares code with the splitter, so it can no
+// longer catch a decoder bug on its own. Reports the window's span, the exact
+// sample count the production side must cover for the comparison to be sound.
+//
+// A frame chain that dead-ends is tolerated as long as the covered prefix
+// contains the whole window: the coverage boundary and the stats are those of
+// the CRC-anchored chain, which is what a splitter would rely on too.
+func MD5OfWindowPure(src string, t *plan.Track, bits int) (string, int64, error) {
+	idx, err := audio.IndexFlacFrames(src)
+	end := t.End
+	if end < 0 {
+		// The last track runs to the end of the (covered) stream.
+		end = idx.TotalSamples
+	}
+	if err != nil {
+		if len(idx.Frames) == 0 {
+			return "", 0, err
+		}
+		last := idx.Frames[len(idx.Frames)-1]
+		if end > last.Start+int64(last.Samples) {
+			return "", 0, err
+		}
+	}
+	i0, i1, ok := audio.CoveringFrames(idx, t.Start, end)
+	if !ok {
+		return "", 0, fmt.Errorf("no frames cover [%d,%d)", t.Start, end)
+	}
+	samples, err := audio.DecodeIndexRange(src, idx.Frames[i0:i1+1])
+	if err != nil {
+		return "", 0, err
+	}
+	spec := audio.SplitSpec{Start: t.Start, End: end, Bits: bits}
+	sum, err := audio.ChecksumRange(samples, spec, idx.Frames[i0:i1+1])
+	if err != nil {
+		return "", 0, err
+	}
+	// ChecksumRange returns the raw digest; match MD5OfFile's hex form.
+	return hex.EncodeToString(sum), end - t.Start, nil
+}
+
+// MD5OfFilePure decodes a produced FLAC file with the pure-Go decoder and
+// reports the PCM md5 of its first `want` samples - the production-side
+// counterpart of MD5OfWindowPure, clipped to the same span the reference
+// covers (a fallback-written file may legitimately cover more than the
+// pure-Go chain view of its source).
+func MD5OfFilePure(path string, want int64) (string, error) {
+	idx, err := audio.IndexFlacFrames(path)
+	if err != nil {
+		return "", err
+	}
+	if len(idx.Frames) == 0 {
+		return "", fmt.Errorf("%s: no frames to decode", path)
+	}
+	if want <= 0 {
+		want = idx.TotalSamples
+	}
+	if want > idx.TotalSamples {
+		return "", fmt.Errorf("%s: covers %d sample(s), plan needs %d",
+			path, idx.TotalSamples, want)
+	}
+	i0, i1, ok := audio.CoveringFrames(idx, 0, want)
+	if !ok {
+		return "", fmt.Errorf("%s: no frames cover [%d,%d)", path, 0, want)
+	}
+	samples, err := audio.DecodeIndexRange(path, idx.Frames[i0:i1+1])
+	if err != nil {
+		return "", err
+	}
+	spec := audio.SplitSpec{Start: 0, End: want, Bits: idx.StreamInfo.BitsPerSample}
+	sum, err := audio.ChecksumRange(samples, spec, idx.Frames[i0:i1+1])
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum), nil
 }
 
 // MD5OfFile feeds a produced file back through the decoder.

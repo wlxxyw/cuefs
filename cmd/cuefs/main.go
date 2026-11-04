@@ -20,7 +20,7 @@ import (
 	"cuefs/internal/split"
 )
 
-const version = "0.2.0-m2"
+const version = "0.2.0-m4.5"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -46,6 +46,10 @@ func main() {
 		err = cmdFlacinfo(args)
 	case "dump":
 		err = cmdDump(args)
+	case "debugmd5":
+		err = cmdDebugMD5(args)
+	case "splitone":
+		err = cmdSplitOne(args)
 	case "version", "--version", "-V":
 		fmt.Println("cuefs", version)
 	case "help", "--help", "-h":
@@ -71,11 +75,13 @@ Commands:
   probe     Report how a cue file's encoding was detected and whether it parses
   scan      Classify every cue file under a directory (read-only)
   split     Materialise tracks + passthrough into an output tree
-  verify     Re-decode the produced tracks and compare PCM md5 against the source
-  retag      Rewrite the metadata stream of the generated tracks in place
-  flacinfo   Dump a FLAC file's metadata blocks and frame chain (no decoding)
-  mount      Read-only FUSE overlay: src with tracks (Linux only)
-  dump       Print the parsed cue structure (tracks, times, tags)
+  verify    Re-decode the produced tracks and compare PCM md5 against the source
+  retag     Rewrite the metadata stream of the generated tracks in place
+  flacinfo  Dump a FLAC file's metadata blocks and frame chain (no decoding)
+  mount     Read-only FUSE overlay: src with tracks (Linux only)
+  dump      Print the parsed cue structure (tracks, times, tags)
+  debugmd5  Diagnostic: a sample window's PCM md5 via the pure-Go decoder
+  splitone  Diagnostic: cut one FLAC track from one FLAC file by sample index
   version   Print the version
 
 Run "cuefs <command> -h" for command flags.
@@ -603,6 +609,7 @@ type workFlags struct {
 	dry     bool
 	quiet   bool
 	workers int
+	refMode string
 }
 
 func newWorkFlags(name string, verify bool) (*commonFlags, *workFlags) {
@@ -613,7 +620,10 @@ func newWorkFlags(name string, verify bool) (*commonFlags, *workFlags) {
 	c.fs.StringVar(&w.only, "only", "", "act only on albums whose name contains this substring")
 	c.fs.BoolVar(&w.force, "force", false, "rebuild tracks that already exist")
 	c.fs.BoolVar(&w.quiet, "quiet", false, "suppress per-track log lines")
-	c.fs.IntVar(&w.workers, "workers", -1, "parallel ffmpeg jobs (default: config workers)")
+	c.fs.IntVar(&w.workers, "workers", -1, "parallel jobs (default: config workers)")
+	if verify {
+		c.fs.StringVar(&w.refMode, "ref", "auto", "reference decoder for verify: auto | ffmpeg | pure")
+	}
 	if !verify {
 		c.fs.BoolVar(&w.link, "link", false,
 			"hardlink passthrough files instead of copying them (same filesystem only)")
@@ -657,6 +667,7 @@ func (c *commonFlags) options(w *workFlags) (split.Options, error) {
 		FfprobeBin:       c.cfg.FfprobeBin,
 		CompressionLevel: c.cfg.Split.CompressionLevel,
 		Workers:          c.cfg.Workers,
+		Reference:        w.refMode,
 		Force:            w.force,
 		Link:             w.link,
 		Only:             w.only,
@@ -716,8 +727,11 @@ func cmdRetag(args []string) error {
 // cmdVerify re-decodes every produced track and compares PCM md5 against the
 // source window the plan claims it came from.
 //
-// Note: --quiet is deliberately ignored here - a FAIL that is not logged is
-// worth nothing, and 388 lines of "ok" are cheap.
+// --ref chooses the reference decoder:
+//
+//	auto    ffmpeg if configured, else the pure-Go decoder (default)
+//	ffmpeg  independent implementation (the strongest check)
+//	pure    shares code with the splitter; only useful without ffmpeg
 func cmdVerify(args []string) error {
 	c, w := newWorkFlags("verify", true)
 	if err := c.fs.Parse(args); err != nil {

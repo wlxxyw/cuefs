@@ -75,12 +75,14 @@ func (o *Root) doMaterialize(spec trackSpec) {
 		o.opts.Log("overlay : mkdir %s: %v", filepath.Dir(spec.cachePath), err)
 		return
 	}
-	if err := engine.WriteTrack(spec.srcPath, spec.album.SampleRate, spec.track,
-		spec.cachePath, engine.Options{
-			FfmpegBin:        o.opts.FfmpegBin,
-			CompressionLevel: o.opts.CompressionLevel,
-			Extension:        o.opts.Extension,
-		}); err != nil {
+	if err := engine.WriteTrack(spec.srcPath, engine.Facts{
+		SampleRate: spec.album.SampleRate, Channels: spec.album.Channels,
+		Bits: spec.album.Bits,
+	}, spec.track, spec.cachePath, engine.Options{
+		FfmpegBin:        o.opts.FfmpegBin,
+		CompressionLevel: o.opts.CompressionLevel,
+		Extension:        o.opts.Extension,
+	}); err != nil {
 		o.opts.Log("overlay : FAIL %s: %v", spec.cachePath, err)
 		return
 	}

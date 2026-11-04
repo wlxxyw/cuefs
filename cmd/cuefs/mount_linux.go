@@ -15,8 +15,8 @@ import (
 	"cuefs/internal/fs"
 )
 
-// mountFlags collects everything `cuefs mount` needs. They are registered on
-// the shared flag set so that --config/--encoding keep working.
+// newWorkFlags collects the flags that `split`, `retag`, `verify` and
+// `mount` share.
 type mountFlags struct {
 	src        string
 	mp         string
@@ -26,6 +26,7 @@ type mountFlags struct {
 	synthesize bool
 	quiet      bool
 	workers    int
+	refMode    string
 }
 
 func init() {
@@ -89,11 +90,11 @@ func cmdMount(args []string, m *mountFlags) error {
 		Log:              log,
 	}
 	if m.synthesize {
-		// Explicit opt-in: cache misses then need the external binary for
-		// FLAC/APE. Without it the running mount is dependency-free.
+		// APE (and any FLAC that the pure-Go engine cannot handle) is
+		// synthesised with the external binary on demand.
 		o.FfmpegBin = c.cfg.FfmpegBin
 	} else {
-		log("mount   : external synthesis disabled; cache misses will error")
+		log("mount   : flac/wav misses synthesise in pure Go; ape misses need --synthesize + ffmpeg_bin")
 	}
 
 	if info, err := os.Stat(m.mp); err != nil && os.IsNotExist(err) {

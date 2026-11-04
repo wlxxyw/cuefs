@@ -22,6 +22,12 @@ import (
 type Options struct {
 	SrcRoot, OutRoot string
 
+	// Reference controls which decoder computes the source window's PCM md5
+	// during verify: "auto" (default), "ffmpeg" or "pure". auto prefers
+	// ffmpeg, which is an independent implementation, and falls back to the
+	// pure-Go decoder when the binary is not configured.
+	Reference string
+
 	// Source classification
 	SplitExtensions []string
 	EncodingList    []string
@@ -47,7 +53,19 @@ type Options struct {
 	Log     func(format string, args ...any)
 }
 
+// defaultsRef normalises the verify reference mode (auto | ffmpeg | pure).
+func (o *Options) defaultsRef() {
+	switch strings.ToLower(o.Reference) {
+	case "", "auto":
+		o.Reference = "auto"
+	case "ffmpeg", "pure":
+	default:
+		o.Reference = "auto"
+	}
+}
+
 func (o *Options) defaults() {
+	o.defaultsRef()
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
@@ -320,12 +338,13 @@ func writeTrack(o Options, album *plan.Album, t *plan.Track, st *Stats) {
 		return
 	}
 
-	if err := engine.WriteTrack(album.SourcePath, album.SampleRate, t, out,
-		engine.Options{
-			FfmpegBin:        o.FfmpegBin,
-			CompressionLevel: o.CompressionLevel,
-			Extension:        o.Extension,
-		}); err != nil {
+	if err := engine.WriteTrack(album.SourcePath, engine.Facts{
+		SampleRate: album.SampleRate, Channels: album.Channels, Bits: album.Bits,
+	}, t, out, engine.Options{
+		FfmpegBin:        o.FfmpegBin,
+		CompressionLevel: o.CompressionLevel,
+		Extension:        o.Extension,
+	}); err != nil {
 		st.TracksFailed++
 		st.Errors++
 		st.Warnings++
@@ -564,17 +583,13 @@ func Verify(o Options) (*VerifyStats, error) {
 		return st, err
 	}
 	o.SrcRoot = p.Root
-	type check struct {
-		src, out string
-		rate     int
-		track    *plan.Track
-	}
 	checks := make([]check, 0, 512)
 	for _, a := range p.Albums {
 		for _, t := range a.Tracks {
 			checks = append(checks, check{
 				src: a.SourcePath, out: filepath.Join(a.OutDir, t.Name),
-				rate: a.SampleRate, track: t,
+				rate: a.SampleRate, bits: a.Bits, channels: a.Channels,
+				track: t,
 			})
 		}
 	}
@@ -582,45 +597,16 @@ func Verify(o Options) (*VerifyStats, error) {
 	pool := make(chan check)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	runner := engine.Runner{FfmpegBin: o.FfmpegBin}
 	for i := 0; i < o.Workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for c := range pool {
-				runner := engine.Runner{FfmpegBin: o.FfmpegBin}
-
-				info, err := os.Stat(c.out)
-				if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
-					if err != nil && !os.IsNotExist(err) {
-						o.Log("verify : %s: %v", prettify(o, c.out), err)
-					}
-					mu.Lock()
-					st.Missing++
-					mu.Unlock()
-					continue
-				}
-				ref, rerr := runner.MD5OfWindow(c.src, c.rate, c.track)
-				got, gerr := runner.MD5OfFile(c.out)
+				verr := verifyOne(o, runner, c, st)
 				mu.Lock()
-				if rerr != nil {
-					st.Checked++
-					st.Failed++
-					o.Log("FAIL   : %s reference: %v", prettify(o, c.out), rerr)
-				} else if gerr != nil {
-					st.Checked++
-					st.Failed++
-					o.Log("FAIL   : %s produced: %v", prettify(o, c.out), gerr)
-				} else if ref != got {
-					st.Checked++
-					st.Failed++
-					o.Log("FAIL   : %s ref=%s got=%s", prettify(o, c.out), ref, got)
-				} else {
-					st.Checked++
-					o.Log("ok     : %s", prettify(o, c.out))
-					if terr := checkTags(c.out, c.track.Tags); terr != "" {
-						st.Failed++
-						o.Log("FAIL   : %s tags: %s", prettify(o, c.out), terr)
-					}
+				if verr != nil {
+					o.Log("FAIL   : %s: %v", prettify(o, c.out), verr)
 				}
 				mu.Unlock()
 			}
@@ -634,7 +620,98 @@ func Verify(o Options) (*VerifyStats, error) {
 	return st, nil
 }
 
-// humanBytes renders a byte count for humans.
+// check is one track to verify.
+type check struct {
+	src      string
+	out      string
+	rate     int
+	bits     int
+	channels int
+	track    *plan.Track
+}
+
+// verifyOne runs one track's verification and bumps the stats; it returns
+// the fatal error only (a failing md5/tag comparison is a stat bump, not a
+// run-stopping failure).
+func verifyOne(o Options, runner engine.Runner, c check, st *VerifyStats) error {
+	info, err := os.Stat(c.out)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		if err != nil && !os.IsNotExist(err) {
+			o.Log("verify : %s: %v", prettify(o, c.out), err)
+		}
+		st.Missing++
+		return nil
+	}
+	ref, got, terr := referenceMD5(o, runner, c)
+	switch {
+	case terr != nil:
+		st.Failed++
+		o.Log("FAIL   : %s: %v", prettify(o, c.out), terr)
+		return nil
+	case ref != got:
+		st.Failed++
+		o.Log("FAIL   : %s ref=%s got=%s", prettify(o, c.out), ref, got)
+		return nil
+	}
+	st.Checked++
+	o.Log("ok     : %s", prettify(o, c.out))
+	if terr := checkTags(c.out, c.track.Tags); terr != "" {
+		st.Failed++
+		o.Log("FAIL   : %s tags: %s", prettify(o, c.out), terr)
+	}
+	return nil
+}
+
+// referenceMD5 computes the production-side md5 with the configured
+// reference decoder.
+//
+// "auto" prefers ffmpeg, a fully independent implementation, and only falls
+// back to the pure-Go decoder when no binary is configured (in which case the
+// check shares code with the splitter and is logged as self-checked).
+//
+// --ref pure compares pure↔pure over the SAME span: the reference decodes the
+// source window, the production side decodes the output file clipped to the
+// same span. An externally written file may cover more samples than the
+// pure-Go chain view of its source; the clip keeps the sides comparable.
+func referenceMD5(o Options, runner engine.Runner, c check) (string, string, error) {
+	mode := strings.ToLower(o.Reference)
+	if mode == "auto" {
+		mode = "ffmpeg"
+		if o.FfmpegBin == "" {
+			mode = "pure"
+		}
+	}
+
+	var ref string
+	var rerr error
+	if mode == "ffmpeg" {
+		if o.FfmpegBin == "" {
+			return "", "", fmt.Errorf("ffmpeg reference requested but ffmpeg_bin is not configured")
+		}
+		ref, rerr = runner.MD5OfWindow(c.src, c.rate, c.track)
+		if rerr != nil {
+			// WAV/APE etc. have no pure reference; surface the error.
+			return "", "", rerr
+		}
+		var got string
+		got, rerr = runner.MD5OfFile(c.out)
+		return ref, got, rerr
+	}
+
+	// Pure mode. APE (and any non-FLAC source) has no pure decoder at all.
+	if ext := strings.ToLower(filepath.Ext(c.src)); ext != ".flac" {
+		return "", "", fmt.Errorf(
+			"%s sources have no pure decoder: --ref pure cannot verify them (use --ref ffmpeg)", ext)
+	}
+	sum, span, perr := engine.MD5OfWindowPure(c.src, c.track, c.bits)
+	if perr != nil {
+		return "", "", perr
+	}
+	dgst := ""
+	dgst, perr = engine.MD5OfFilePure(c.out, span)
+	return sum, dgst, perr
+}
+
 func humanBytes(n uint64) string {
 	const unit = 1024
 	if n < unit {

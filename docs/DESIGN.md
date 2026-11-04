@@ -211,6 +211,37 @@ ffmpeg -ss <floor(seconds)> -i SRC        -map 0:a:0 -vn -map_metadata -1 -map_c
   约 5 s）。附带 STREAMINFO 解析、RF64/RIFF 的 WAV 解析与纯 Go 切分
   （`internal/audio/wav.go`，按 BlockAlign 字节切片，**零解码零 CPU**，
   单测覆盖；本库没有 WAV 整轨样本）。
+  帧头语义与 mewkiz/ffmpeg 解码器逐表核对（M4.5 修正）：
+  - block size code：`0001=192`、`0010-0101=576·2^(n-2)`、`0110=8bit 字段`、
+    `0111=16bit 字段`、**`1000-1111=256·2^(n-8)`（无字段）**，`0000=reserved`
+    不出现。早期版本把 1000-1111 当"取自 STREAMINFO"是错误的——真实文件里
+    code 12 ↔ 4096、code 10 ↔ 1024 恰好让该误读在 Σ 校验下偶发吻合，
+    尾部差异可达一个 block（3072 采样）；
+  - UTF-8 编码的编号字段：fixed 策略=帧号（ffmpeg 从 0 起）、variable=样本号；
+  - 计数 Σ 与 STREAMINFO.total_samples 允许不一致（CRC 锚定的链是磁盘事实，
+    muxer 记账可能有 ≤1 block 的出入），flacinfo 会打印差异但不算错误。
+
+#### 4.3.2 M4.5：FLAC 分轨全程纯 Go（去 ffmpeg）
+
+`flacsplit.go` + `flacwrite.go`（`WriteFLACTrack`）：
+
+1. **字节拷贝**：窗口内完整帧原样拷贝——帧头按「fixed 策略=帧号」时重写为
+   「variable 策略=样本号」（首 6 位变成 sync+样本号），CRC-8/CRC-16 重算，
+   音频字节零改动（源文件帧号在新流里无意义，且 ffmpeg 拒绝重编号）。
+2. **边界帧 VERBATIM**：至多两个跨窗口边界的帧整帧用 mewkiz 解码后以
+   VERBATIM 子帧重编码（可变阻塞 + 显式 16bit 块长字段，块长取帧内窗口实际
+   采样数），帧序号写输出流内的样本位置。RAW PCM 数据内假同步密度实测可达
+   1/70 字节（单帧内 134 个），所以用 CRC-16 逐候选锚定边界，不用启发式。
+3. **STREAMINFO**：输出流的真实 MD5 在解码窗口时同步计算写入（和 ffmpeg
+   `-f md5` 同口径：interleaved LE、Bits/8 字节），验证端可闭环。
+4. **引擎分派**（`engine/writer.go` `WriteTrack`）：`flac→flac`、`wav→wav`
+   纯 Go；`ape→flac` 走 ffmpeg（**ffmpeg 从此只服务 APE**）；其余组合报错。
+   `flac→flac` 若遇到覆盖窗口之外的帧链死点（个别源文件中段有局部损坏，
+   ffmpeg 靠重同步容错），自动落 ffmpeg fallback 保产出正确。
+5. **verify 参考模式**（`--ref auto|ffmpeg|pure`）：`auto` 有 ffmpeg 用 ffmpeg
+   （独立实现，最强检查）；`pure` 走 mewkiz 自检——REF 解源窗口，产端把输出
+   剪到与参考相同的 span 再比（外部写入可以覆盖更多样本）；APE 没有 pure
+   解码器，`--ref pure` 直接给出明确拒绝信息。
 - **实证**：《许巍 - 在别处》（306 MB / 30,850 帧 / 41 分钟）：
 
 ```
@@ -223,16 +254,18 @@ trailer : 0 byte(s) after the last frame
   10  start  114887556 -> frame 28049  off by 2948 sample(s) (66.8 ms)
 ```
 
-  帧链 Σ == STREAMINFO 且 trailer == 0 → 索引器逐帧解析正确（含"块大小码
-  0000 与 1000-1111 都表示'取自 STREAMINFO'"这一实现细节，由 Σ 一致性实证）。
+  帧链 Σ == STREAMINFO 且 trailer == 0 → 索引器逐帧解析正确（M4.5 修正后：
+  1000-1111 按 `256·2^(n-8)` 取样本数，Σ 与多种 muxer 的输出都严格一致）。
 
 **M4 的关键结论（决定 FLAC 路线）**：同一报告同时给出
 "cue 边界是否落在帧边界"，实测 **10/10 个 cue 边界都不落在 FLAC 帧边界上**
 （偏差 1144..3472 采样 ≈ 25–79 ms）。这正是"纯字节拷贝切 FLAC 不可行"的
 数据证据：不对边界帧重编码的话，轨内会带入前/后一轨 25–79 ms 的音频。
 
-因此 M4 的"零 CPU"只有 **WAV 逐字节可达**；FLAC 保留 ffmpeg 解码重编码，
-但元数据完全交给 Go，并产出帧索引器作为 **FUSE 流式合成的地基（M2 复用）**。
+M4 当时以为 FLAC 必须保留 ffmpeg 解码重编码；M4.5 推翻：边界帧无须压缩——
+用 **VERBATIM 子帧**（规范内最平凡、占字节最多但完全合法）重编码即可，
+ffmpeg 从 FLAC 路径退役为 APE 专用。帧索引器继续作为 FUSE 流式合成的地基
+（M2 复用）。
 
 配置项 `split.ape_mode: convert | hide | passthrough`（默认 `convert`），
 `split.compression_level: 0-8`（默认 5）。

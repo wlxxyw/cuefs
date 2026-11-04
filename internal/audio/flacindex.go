@@ -9,19 +9,31 @@ import (
 	"os"
 )
 
-// FlacFrame is one audio frame of a FLAC file.
+// FlacFrame is one audio frame of a FLAC file. Bytes is set when the caller
+// synthesised the frame inline (a verbatim boundary frame) instead of copying
+// it from the source; Strategy carries the header-number coding to use for
+// the OUTPUT frame (the source's absolute frame numbers are meaningless in
+// the new stream).
 type FlacFrame struct {
-	Offset        int64 // byte offset of the frame header
+	Offset        int64 // byte offset of the frame header (source)
 	Length        int   // header + subframes + CRC-16
 	Start         int64 // absolute sample index of the first sample
 	Samples       int   // samples in this frame
 	BlocksizeCode int
 	Coding        string // "fixed" or "variable"
+	Strategy      strategy
+	SampleNum     int64  // first sample number in the new stream
+	Bytes         []byte // inline content (nil for source entries)
 }
 
 // maxLeadingJunk bounds the gap tolerated between the metadata chain and the
 // first frame (measured: 8 stray zero bytes on a real album).
 const maxLeadingJunk = 4096
+
+// Resume marks one false-sync dead end: the frame claiming to live at
+// AtOffset failed every CRC-16 candidate check, so the indexer jumped ahead
+// to NextSync. Positions in the resumed chain are only relative to the
+// last good frame.
 
 // FlacIndex describes the layout of a FLAC file without decoding it.
 type FlacIndex struct {
@@ -36,9 +48,13 @@ type FlacIndex struct {
 	LeadingJunk int64
 }
 
-// maxEndAttempts bounds how many candidate ends are tried for one frame;
-// false sync words are rare enough that a handful is plenty.
-const maxEndAttempts = 64
+// maxEndAttempts bounds how many candidate ends are tried for one frame.
+// VERBATIM (raw-PCM) frames contain sync-like byte pairs at PCM frequency —
+// measured densities run past one per 70 bytes on WAV-dérived sources, so a
+// six-second 16k frame can strand 300+ candidates before its true end; the
+// cap stays deliberately below that of a runaway scan because a chain break
+// surfaces as an error anyway.
+const maxEndAttempts = 1024
 
 // IndexFlacFrames walks a FLAC file's frame chain (FLAC spec §9) without
 // decoding anything: it finds each frame header, derives the frame's sample
@@ -80,6 +96,7 @@ func IndexFlacFrames(path string) (*FlacIndex, error) {
 	var lastSample int64
 
 	probe := make([]byte, 32)
+	hdrProbe := make([]byte, 32)
 	skipped := int64(0)
 	for {
 		for pi < len(cands) && cands[pi] < expect {
@@ -124,12 +141,7 @@ func IndexFlacFrames(path string) (*FlacIndex, error) {
 			walkErr = errors.New(msg)
 			break
 		}
-		if cands[pi] != expect {
-			walkErr = fmt.Errorf(
-				"%s: frame chain broken at offset %d: next sync word found at %d instead",
-				path, expect, cands[pi])
-			break
-		}
+		// (cands[pi] != expect) never happens after the strict resume: pi was advanced.
 		accepted := false
 		for k := pi + 1; k <= len(cands) && k <= pi+maxEndAttempts; k++ {
 			j := f.size
@@ -138,6 +150,23 @@ func IndexFlacFrames(path string) (*FlacIndex, error) {
 			}
 			if j-expect < 8 { // header + CRC-16 cannot be shorter
 				continue
+			}
+			// A candidate end is also the next frame's header. Requiring
+			// that header to validate (CRC-8) is what filters the CRC-16
+			// collision trap: a 16-bit checksum has a 1/65536 chance of
+			// matching a false boundary, and one wrong anchor desyncs every
+			// frame that follows — measured: five albums dead-ended a few
+			// thousand frames into the book. The last frame of the file has
+			// nothing to validate at its end (j == file size).
+			if k < len(cands) {
+				n2, _ := readAt(f, hdrProbe, j)
+				if n2 > 5 {
+					if _, _, h2err := parseFrameHeader(hdrProbe, &si); h2err != nil {
+						continue
+					}
+				} else {
+					continue
+				}
 			}
 			length := int(j - expect)
 			if cap(buf) < length {
@@ -173,13 +202,16 @@ func IndexFlacFrames(path string) (*FlacIndex, error) {
 		}
 		if !accepted {
 			failures++
-			pi++
-			if failures > maxEndAttempts {
-				walkErr = fmt.Errorf(
-					"%s: cannot find a frame whose CRC-16 validates at offset %d; the file is damaged or not FLAC",
-					path, expect)
-				break
+			msg := fmt.Sprintf(
+				"%s: no frame CRC-16 validates at offset %d (%d false sync(s) tried, %d frame(s) walked)",
+				path, expect, maxEndAttempts, len(idx.Frames))
+			if len(idx.Frames) > 0 {
+				last := idx.Frames[len(idx.Frames)-1]
+				msg += fmt.Sprintf(" (last good frame at %d, %d byte(s))",
+					last.Offset, last.Length)
 			}
+			walkErr = errors.New(msg)
+			break
 		}
 	}
 	if len(idx.Frames) == 0 && walkErr == nil {
@@ -192,21 +224,23 @@ func IndexFlacFrames(path string) (*FlacIndex, error) {
 	} else {
 		idx.Trailer = f.size - expect
 	}
-	if si.Present && si.TotalSamples != 0 && idx.TotalSamples != si.TotalSamples && walkErr == nil {
-		walkErr = fmt.Errorf(
-			"%s: frame chain totals %d samples but STREAMINFO says %d",
-			path, idx.TotalSamples, si.TotalSamples)
-	}
+	// STREAMINFO.total_samples is muxer bookkeeping; the frame chain is
+	// CRC-16-anchored and authoritative for what is on disk. ffmpeg's
+	// encoder writes tails where the two disagree by up to one block
+	// (measured: +3072 samples on a real album), and an independent
+	// ffmpeg decode of the same windows agrees with the chain's view —
+	// so a difference here is reported by flacinfo, not fatal.
 	return idx, walkErr
 }
 
 // parseFrameHeader decodes a FLAC frame header (FLAC spec §9). buf must start
-// at the sync word and contain the whole header. It returns the header length
-// in bytes (including the CRC-8) and the frame's sample count.
+// at the sync word and contain the whole header. It returns the header
+// length in bytes (including the CRC-8) and the frame's sample count.
 //
-// Block size codes 0000 and 1000-1111 mean "take the block size from
-// STREAMINFO"; that is what ffmpeg's encoder writes (measured: code 12 with
-// no extra bytes), so si is required.
+// Block size codes (mewkiz + ffmpeg decoder semantics, cross-checked against
+// real ffmpeg-written files): 0001=192, 0010-0101=576·2^(n-2), 0110=8-bit
+// field, 0111=16-bit field, 1000-1111=256·2^(n-8) with NO field. Code 0000 is
+// reserved and never appears in streams written by ffmpeg or libFLAC.
 func parseFrameHeader(buf []byte, si *StreamInfo) (int, FlacFrame, error) {
 	var f FlacFrame
 	if len(buf) < 6 {
@@ -222,13 +256,14 @@ func parseFrameHeader(buf []byte, si *StreamInfo) (int, FlacFrame, error) {
 	bsCode := int(buf[2] >> 4)
 	srCode := int(buf[2] & 0x0F)
 	f.BlocksizeCode = bsCode
-	fromStream := bsCode == 0 || bsCode >= 8
-	if fromStream {
-		if si == nil || !si.Present || si.MaxBlocksize <= 0 {
-			return 0, f, fmt.Errorf(
-				"block size code %d needs STREAMINFO, which is missing", bsCode)
-		}
-		f.Samples = si.MaxBlocksize
+	switch {
+	case bsCode >= 8:
+		// 1000-1111: 256 · 2^(n-8) samples, no field (measured: code 12
+		// frames are 4096 samples with a 16-byte header+payload, code 10
+		// frames 1024 — code 12 ≠ "from STREAMINFO").
+		f.Samples = 256 << (bsCode - 8)
+	case bsCode == 0:
+		return 0, f, fmt.Errorf("reserved block size code 0")
 	}
 
 	// Coded frame/sample number (UTF-8 style, 1..7 bytes), from byte 4 on.
@@ -238,8 +273,9 @@ func parseFrameHeader(buf []byte, si *StreamInfo) (int, FlacFrame, error) {
 	}
 	pos := 4 + numLen
 
-	if !fromStream {
-		// Optional block size field, then the optional sample rate field.
+	if f.Samples == 0 {
+		// Optional block size field (codes 0001-0111), then the optional
+		// sample rate field.
 		switch bsCode {
 		case 1:
 			f.Samples = 192
