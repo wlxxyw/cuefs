@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"cuefs/internal/audio"
 	"cuefs/internal/plan"
@@ -137,6 +139,24 @@ func (r *Runner) MD5OfWindow(src string, rate int, t *plan.Track) (string, error
 // contains the whole window: the coverage boundary and the stats are those of
 // the CRC-anchored chain, which is what a splitter would rely on too.
 func MD5OfWindowPure(src string, t *plan.Track, bits int) (string, int64, error) {
+	if isWav(src) {
+		// WAV windows are byte slices of the data chunk; no index needed.
+		end := t.End
+		span := int64(0)
+		sum, err := audio.ChecksumWavWindow(src, t.Start, end)
+		if err != nil {
+			return "", 0, err
+		}
+		if end < 0 {
+			w, werr := audio.OpenWav(src)
+			if werr != nil {
+				return "", 0, werr
+			}
+			end = w.DataLen / int64(w.Info.BlockAlign)
+		}
+		span = end - t.Start
+		return hex.EncodeToString(sum), span, nil
+	}
 	idx, err := audio.IndexFlacFrames(src)
 	end := t.End
 	if end < 0 {
@@ -175,6 +195,13 @@ func MD5OfWindowPure(src string, t *plan.Track, bits int) (string, int64, error)
 // covers (a fallback-written file may legitimately cover more than the
 // pure-Go chain view of its source).
 func MD5OfFilePure(path string, want int64) (string, error) {
+	if isWav(path) {
+		sum, err := audio.ChecksumWavWindow(path, 0, want)
+		if err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(sum), nil
+	}
 	idx, err := audio.IndexFlacFrames(path)
 	if err != nil {
 		return "", err
@@ -206,13 +233,33 @@ func MD5OfFilePure(path string, want int64) (string, error) {
 }
 
 // MD5OfFile feeds a produced file back through the decoder.
-func (r *Runner) MD5OfFile(path string) (string, error) {
+// MD5OfFile feeds a produced file back through the decoder. span bounds the
+// decode to the track's declared sample count (span <= 0 derives it from the
+// FLAC STREAMINFO total, or decodes the whole file when there is none).
+//
+// The clip mirrors the reference side's atrim and keeps a known ffmpeg
+// parser quirk out of the comparison: on cuefs-written FLACs (variable
+// strategy tail) ffmpeg's parser can attach a phantom frame at EOF and
+// decode STREAMINFO-total+4096 samples, while the track's own bytes stay
+// byte-exact against the source window (measured with cmp). taglib/Navidrome
+// read the STREAMINFO total and are unaffected; the md5 comparison must
+// however compare the same span both sides.
+func (r *Runner) MD5OfFile(path string, span int64) (string, error) {
 	r.defaults()
+	if span <= 0 {
+		if _, si, _, err := audio.ReadMetaBlocks(path); err == nil && si.TotalSamples > 0 {
+			span = si.TotalSamples
+		}
+	}
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-i", path, "-map", "0:a:0", "-vn", "-map_metadata", "-1",
-		"-f", "md5", "-",
 	}
+	if span > 0 {
+		args = append(args, "-af",
+			fmt.Sprintf("atrim=start_sample=0:end_sample=%d,asetpts=PTS-STARTPTS", span))
+	}
+	args = append(args, "-f", "md5", "-")
 	return runMD5(r.FfmpegBin, args)
 }
 
@@ -232,4 +279,10 @@ func (r *Runner) ExtractCover(src, out string) error {
 		return err
 	}
 	return os.Rename(tmp, out)
+}
+
+// isWav reports whether a path is a WAV file (the pure-Go decoder treats
+// those as byte windows instead of frame chains).
+func isWav(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".wav")
 }

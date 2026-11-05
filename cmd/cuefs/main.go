@@ -20,7 +20,7 @@ import (
 	"cuefs/internal/split"
 )
 
-const version = "0.2.0-m4.5"
+const version = "0.2.0-m4.6"
 
 func main() {
 	if len(os.Args) < 2 {

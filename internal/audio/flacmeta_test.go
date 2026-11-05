@@ -151,3 +151,43 @@ func TestVorbisCommentEncodingIsStable(t *testing.T) {
 		t.Fatalf("encoded payload is %q", data)
 	}
 }
+
+// TestReadTags covers the base layer of the tag merge: a FLAC's Vorbis
+// Comment comes back keyed upper-case, and formats without a tag container
+// return an empty base instead of an error.
+func TestReadTags(t *testing.T) {
+	dir := t.TempDir()
+	si := streamInfoBytes(4096, 44100, 2, 16, 576)
+	raw := buildFlac(si, []VorbisEntry{
+		{Key: "album", Value: "在别处"},
+		{Key: "GENRE", Value: "Rock"},
+		{Key: "GENRE", Value: "Live"},
+	}, nil)
+	path := filepath.Join(dir, "album.flac")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tags, err := ReadTags(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tags["ALBUM"]; len(got) != 1 || got[0] != "在别处" {
+		t.Errorf("ALBUM = %q, want [在别处] (keys upper-cased)", got)
+	}
+	if got := tags["GENRE"]; len(got) != 2 || got[0] != "Rock" || got[1] != "Live" {
+		t.Errorf("GENRE = %q, want two values kept separately", got)
+	}
+
+	// A WAV has no tag container: an empty base, no error.
+	wav := filepath.Join(dir, "song.wav")
+	if err := os.WriteFile(wav, []byte("RIFF....WAVE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tags, err = ReadTags(wav)
+	if err != nil {
+		t.Fatalf("WAV must not error: %v", err)
+	}
+	if len(tags) != 0 {
+		t.Errorf("WAV base = %v, want empty", tags)
+	}
+}

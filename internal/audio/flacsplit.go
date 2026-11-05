@@ -197,7 +197,7 @@ func WriteFLACTrack(spec SplitSpec, out string) error {
 		if _, err := readFullAt(src, srcFrame, f.Offset); err != nil {
 			return fmt.Errorf("read frame at %d: %w", f.Offset, err)
 		}
-		body, err := rewriteHeader(srcFrame, f.Strategy, uint64(f.SampleNum))
+		body, err := rewriteHeader(srcFrame, f.Strategy, uint64(f.SampleNum), si.BitsPerSample)
 		if err != nil {
 			return err
 		}
@@ -295,7 +295,7 @@ func failWrite(fh *os.File, tmp, format string, a ...any) error {
 //	04..   UTF-8 coded number, then optional block size / sample rate bytes,
 //	       then the CRC-8
 //	body   subframes + CRC-16
-func rewriteHeader(srcFrame []byte, strat strategy, sampleNum uint64) ([]byte, error) {
+func rewriteHeader(srcFrame []byte, strat strategy, sampleNum uint64, bps int) ([]byte, error) {
 	if strat == stratNone {
 		return srcFrame, nil
 	}
@@ -310,7 +310,11 @@ func rewriteHeader(srcFrame []byte, strat strategy, sampleNum uint64) ([]byte, e
 
 	out := make([]byte, 0, len(srcFrame)+8)
 	out = append(out, srcFrame[0], srcFrame[1]|0x01) // strategy = sample
-	out = append(out, srcFrame[2], srcFrame[3])
+	// Normalise the sample-size nibble to the explicit code (see
+	// encodeVerbatimFrame): sources written with 000 "from STREAMINFO" would
+	// otherwise break standalone frame parsers on the copied frames too.
+	// nibble = <3-bit size code><1 reserved>, i.e. code<<1.
+	out = append(out, srcFrame[2], (srcFrame[3]&0xF0)|(sizeCodeFor(bps)<<1))
 	out = writeUTF8Number(out, sampleNum)
 
 	// The header continues with the optional block size / sample rate bytes
@@ -342,6 +346,25 @@ func rewriteHeader(srcFrame []byte, strat strategy, sampleNum uint64) ([]byte, e
 	crc := crc16(out)
 	out = append(out, byte(crc>>8), byte(crc))
 	return out, nil
+}
+
+// sizeCodeFor maps a bit depth onto the frame header's explicit sample-size
+// code (0 when the spec has none, e.g. 32-bit).
+func sizeCodeFor(bps int) byte {
+	switch bps {
+	case 8:
+		return 1
+	case 12:
+		return 2
+	case 16:
+		return 4
+	case 20:
+		return 5
+	case 24:
+		return 6
+	default:
+		return 0
+	}
 }
 
 // utf8CodedEnd returns the index of the byte AFTER a source frame's header

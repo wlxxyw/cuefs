@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -115,6 +116,48 @@ func blockNameFor(kind int) string {
 		return n
 	}
 	return fmt.Sprintf("TYPE[%d]", kind)
+}
+
+// ReadTags returns a FLAC file's Vorbis Comment keyed by upper-case tag name
+// with one entry per value. It is the base layer of the tag merge (DESIGN §2:
+// the audio file's tags are the base, the cue sheet overrides per key).
+//
+// Formats without a tag container (WAV) and formats we do not parse tags for
+// (APE) return an empty map: losing a base is not an error, the cue sheet
+// still fully determines the result.
+func ReadTags(path string) (map[string][]string, error) {
+	switch {
+	case strings.EqualFold(filepath.Ext(path), ".flac"):
+		// fallthrough to the FLAC reader below
+	case strings.EqualFold(filepath.Ext(path), ".wav"):
+		return ReadWavTags(path)
+	default:
+		// Formats without a tag container (or that we do not parse tags
+		// for, e.g. APE) contribute no base.
+		return map[string][]string{}, nil
+	}
+	blocks, _, _, err := ReadMetaBlocks(path)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, b := range blocks {
+		if b.Kind != BlockVorbisComment {
+			continue
+		}
+		_, entries, err := DecodeVorbisComment(b.Data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: VORBIS_COMMENT: %w", path, err)
+		}
+		for _, e := range entries {
+			k := strings.ToUpper(strings.TrimSpace(e.Key))
+			if k == "" {
+				continue
+			}
+			out[k] = append(out[k], e.Value)
+		}
+	}
+	return out, nil
 }
 
 // parseStreamInfo decodes the 34 byte STREAMINFO payload (FLAC spec §5).

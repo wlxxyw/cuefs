@@ -164,10 +164,19 @@ func encodeVerbatimFrame(samples [][]int32, firstSampleNum uint64, bps int) ([]b
 		return nil, fmt.Errorf("unsupported bit depth %d", bps)
 	}
 
+	// <3> sample size: write the EXPLICIT code whenever the spec has one.
+	// Code 000 ("get from STREAMINFO") is legal for a stream but poisons a
+	// standalone frame parse: mewkiz leaves frame.BitsPerSample at 0, reads
+	// zero-bit VERBATIM samples and then trips over a CRC-16 that lands in
+	// the silence (measured: "expected 0x0000"). ffmpeg writes the explicit
+	// code too (byte3 = 0x18 for stereo/16-bit). 32-bit has no code in the
+	// spec, so it stays 000 (mewkiz cannot decode 32-bit FLAC anyway).
+	sizeCode := uint64(sizeCodeFor(bps))
+
 	var hdr, sub bitBuffer
 	// Frame header: sync, reserved 0, VARIABLE blocking, block size code 7
 	// (16-bit block size - 1), sample rate code 0 (from STREAMINFO),
-	// independent channels, sample size code 0 (from STREAMINFO), reserved,
+	// independent channels, explicit sample size, reserved,
 	// UTF-8 SAMPLE number, 16-bit block size, CRC-8.
 	hdr.wts(0b11111111111110, 14)
 	hdr.wts(0, 1)
@@ -175,8 +184,8 @@ func encodeVerbatimFrame(samples [][]int32, firstSampleNum uint64, bps int) ([]b
 	hdr.wts(7, 4)
 	hdr.wts(0, 4)
 	hdr.wts(uint64(nch-1), 4)
-	hdr.wts(0, 3)
-	hdr.wts(0, 1)
+	hdr.wts(sizeCode, 3)
+	hdr.wts(0, 1) // reserved
 	for _, b := range utf8Number(firstSampleNum) {
 		hdr.wts(uint64(b), 8)
 	}
@@ -184,8 +193,12 @@ func encodeVerbatimFrame(samples [][]int32, firstSampleNum uint64, bps int) ([]b
 	hdr.buf = append(hdr.buf, crc8(hdr.buf))
 
 	for _, ch := range samples {
-		sub.wts(0, 1) // no wasted bits
+		// Subframe header (FLAC spec §8.2): <0> zero padding, <6> type,
+		// <1> wasted-bits flag. All eight bits are mandatory; dropping the
+		// flag shifts every reader one bit into the samples.
+		sub.wts(0, 1) // padding
 		sub.wts(1, 6) // VERBATIM
+		sub.wts(0, 1) // no wasted bits
 		for _, s := range ch {
 			sub.wts(uint64(uint32(s)), width)
 		}

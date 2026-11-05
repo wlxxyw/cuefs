@@ -2,6 +2,7 @@ package audio
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -229,4 +230,45 @@ func putChunk(b *bytes.Buffer, id string, data []byte) {
 	if len(data)%2 == 1 { // chunks are word aligned
 		b.WriteByte(0)
 	}
+}
+
+// ChecksumWavWindow returns the PCM md5 of samples [start,end) of a WAV file
+// (little-endian interleaved bytes, the same digest ffmpeg's -f md5 reports
+// for PCM). end < 0 means "to the end". Splitting a window needs no decode,
+// and neither does checking one.
+func ChecksumWavWindow(path string, start, end int64) ([]byte, error) {
+	w, err := OpenWav(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.Validate(); err != nil {
+		return nil, err
+	}
+	align := int64(w.Info.BlockAlign)
+	if start < 0 || start*align > w.DataLen {
+		return nil, fmt.Errorf("start %d is past the end of the data chunk", start)
+	}
+	dataEnd := w.DataLen
+	if end >= 0 {
+		dataEnd = end * align
+		if dataEnd > w.DataLen {
+			return nil, fmt.Errorf("end %d is past the end of the data chunk", end)
+		}
+	}
+	off := w.DataOffset + start*align
+	length := dataEnd - start*align
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return nil, err
+	}
+	h := md5.New()
+	if _, err := io.CopyN(h, f, length); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
 }

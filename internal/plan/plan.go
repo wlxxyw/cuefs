@@ -92,6 +92,14 @@ func Build(e *library.Entry, f *audio.Format, opts Options) (*Album, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The audio file's tags are the base of every track's tags (DESIGN §2);
+	// a source we cannot read tags from only loses the base, never the split.
+	baseTags, err := audio.ReadTags(e.SourcePath)
+	baseWarning := ""
+	if err != nil {
+		baseTags = nil
+		baseWarning = fmt.Sprintf("source tags unreadable (%v); falling back to cue only", err)
+	}
 
 	album := &Album{
 		CuePath:    e.CuePath,
@@ -105,6 +113,9 @@ func Build(e *library.Entry, f *audio.Format, opts Options) (*Album, error) {
 		HasVideo:   f.HasVideo,
 		Extractor:  f.HasVideo,
 		Warnings:   append([]string(nil), e.Warnings...),
+	}
+	if baseWarning != "" {
+		album.Warnings = append(album.Warnings, baseWarning)
 	}
 
 	taken := map[string]int{}
@@ -143,7 +154,7 @@ func Build(e *library.Entry, f *audio.Format, opts Options) (*Album, error) {
 			Name:  name,
 			Start: start,
 			End:   end,
-			Tags:  TrackTags(e.Sheet, tr, ignore),
+			Tags:  TrackTags(e.Sheet, tr, baseTags, ignore),
 		})
 	}
 

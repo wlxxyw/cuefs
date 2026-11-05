@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,10 +44,10 @@ func TestTemplateNameForms(t *testing.T) {
 	// A track with no TITLE in the cue gets no TITLE tag; Navidrome falls
 	// back to the track number, which stays honest about the data.
 	sheet, _ := parseTagCue()
-	if v := get(TrackTags(sheet, sheet.Tracks[1], nil), "TITLE"); v != "" {
+	if v := get(TrackTags(sheet, sheet.Tracks[1], nil, nil), "TITLE"); v != "" {
 		t.Errorf("track 02 TITLE = %q, want empty (fixture has none)", v)
 	}
-	if v := get(TrackTags(sheet, sheet.Tracks[0], nil), "TITLE"); v != "I Am" {
+	if v := get(TrackTags(sheet, sheet.Tracks[0], nil, nil), "TITLE"); v != "I Am" {
 		t.Errorf("track 01 TITLE = %q, want \"I Am\"", v)
 	}
 }
@@ -118,7 +119,7 @@ func TestTagRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	album := AlbumTags(sheet, nil)
+	album := AlbumTags(sheet, nil, nil)
 	want := map[string]string{
 		"ALBUM":       "她说 CD2", // padding collapsed
 		"ALBUMARTIST": "林俊杰",
@@ -140,7 +141,7 @@ func TestTagRules(t *testing.T) {
 
 	// Track 02 overrides artist and adds composer/isrc/number.
 	tr := sheet.Tracks[1]
-	tags := TrackTags(sheet, tr, nil)
+	tags := TrackTags(sheet, tr, nil, nil)
 	for k, want := range map[string]string{
 		"TRACKNUMBER": "02",
 		TRACKTOTAL:    "02",
@@ -158,6 +159,71 @@ func TestTagRules(t *testing.T) {
 	}
 }
 
+// TestSourceTagBase checks the DESIGN §2 merge: the source audio file's tags
+// are the base, the cue sheet overrides per key, and keys only the file has
+// survive into the split tracks.
+func TestSourceTagBase(t *testing.T) {
+	sheet, err := parseTagCue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := map[string][]string{
+		"ALBUM":       {"源里的旧专辑名"},
+		"GENRE":       {"摇滚"},
+		"DATE":        {"2001"},
+		"ARTIST":      {"源里的艺术家"},
+		"TITLE":       {"源文件的标题"}, // the album file's title: must never leak
+		"TRACKNUMBER": {"1"},      // the album file's numbering: never leaks
+		"TRACKTOTAL":  {"12"},     // neither does its total
+		"LABEL":       {"某厂牌"},    // only the file knows this one
+	}
+
+	album := AlbumTags(sheet, base, nil)
+	for k, want := range map[string]string{
+		"ALBUM":       "她说 CD2", // cue overrides the file
+		"GENRE":       "POP",    // cue REM overrides the file
+		"DATE":        "2010",   // ditto
+		"ARTIST":      "林俊杰",    // cue PERFORMER overrides the file
+		"ALBUMARTIST": "林俊杰",
+		"LABEL":       "某厂牌", // kept: the cue is silent about it
+	} {
+		if got := get(album, k); got != want {
+			t.Errorf("album %s = %q, want %q", k, got, want)
+		}
+	}
+
+	// Track 01 has a cue TITLE, track 02 does not: neither may fall back to
+	// the album file's TITLE, and neither may inherit its track numbering.
+	if v := get(TrackTags(sheet, sheet.Tracks[0], base, nil), "TITLE"); v != "I Am" {
+		t.Errorf("track 01 TITLE = %q, want \"I Am\"", v)
+	}
+	if v := get(TrackTags(sheet, sheet.Tracks[1], base, nil), "TITLE"); v != "" {
+		t.Errorf("track 02 TITLE = %q, want empty (source TITLE must not leak)", v)
+	}
+	for i, tr := range sheet.Tracks {
+		tags := TrackTags(sheet, tr, base, nil)
+		if v := get(tags, "TRACKNUMBER"); v != fmt.Sprintf("%02d", i+1) {
+			t.Errorf("track %d TRACKNUMBER = %q, want the cue's number", i+1, v)
+		}
+		if v := get(tags, TRACKTOTAL); v != "02" {
+			t.Errorf("track %d TRACKTOTAL = %q, want 02 (cue tracks), not 12", i+1, v)
+		}
+	}
+
+	if has(album, "CUESHEET") {
+		t.Error("the embedded CUESHEET must never leak into track tags")
+	}
+
+	// The ignore filter applies to inherited base keys too.
+	re, err := IgnoreTagsRe([]string{"LABEL"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if has(AlbumTags(sheet, base, re), "LABEL") {
+		t.Error("ignore list must suppress inherited base keys")
+	}
+}
+
 func TestIgnoreTags(t *testing.T) {
 	sheet, err := parseTagCue()
 	if err != nil {
@@ -167,7 +233,7 @@ func TestIgnoreTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tags := TrackTags(sheet, sheet.Tracks[0], re)
+	tags := TrackTags(sheet, sheet.Tracks[0], nil, re)
 	if has(tags, "COMMENT") {
 		t.Error("ignore list must suppress COMMENT")
 	}
@@ -175,8 +241,8 @@ func TestIgnoreTags(t *testing.T) {
 		t.Error("ignore list must not suppress TITLE")
 	}
 	// The default tag order keeps output byte-stable across runs.
-	first := TrackTags(sheet, sheet.Tracks[0], nil)
-	second := TrackTags(sheet, sheet.Tracks[0], nil)
+	first := TrackTags(sheet, sheet.Tracks[0], nil, nil)
+	second := TrackTags(sheet, sheet.Tracks[0], nil, nil)
 	if len(first) != len(second) {
 		t.Fatalf("tag list is not stable")
 	}
@@ -200,7 +266,7 @@ func TestIgnoreTagGlobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tags := TrackTags(sheet, sheet.Tracks[0], re); len(tags) != 0 {
+	if tags := TrackTags(sheet, sheet.Tracks[0], nil, re); len(tags) != 0 {
 		t.Errorf("* must suppress everything, got %+v", tags)
 	}
 	// An escaped glob is still valid input.

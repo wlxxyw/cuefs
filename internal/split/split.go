@@ -417,7 +417,7 @@ func Retag(o Options) (*Stats, error) {
 				o.Log("plan   : %s (%d tag entries)", prettify(o, out), len(t.Tags))
 				continue
 			}
-			if err := audio.WriteVorbisComment(out, engine.Entries(t.Tags)); err != nil {
+			if err := engine.WriteTags(out, t.Tags); err != nil {
 				st.TracksFailed++
 				st.Errors++
 				o.Log("FAIL   : %s: %v", prettify(o, out), err)
@@ -431,10 +431,38 @@ func Retag(o Options) (*Stats, error) {
 	return st, nil
 }
 
-// checkTags compares a produced FLAC's Vorbis Comment with the plan. Only
-// FLAC outputs carry Vorbis comments; the check is skipped for anything else
-// (a WAV output has no metadata stream of its own).
+// checkTags compares a produced track's tags with the plan. FLAC outputs
+// carry a Vorbis Comment (exact, entry by entry); WAV outputs carry an ID3 +
+// RIFF INFO pair, of which the INFO subset is compared (the ID3 frames hold
+// the same values, in frames cuefs itself wrote).
 func checkTags(out string, tags []plan.Tag) string {
+	want := engine.Entries(tags)
+	if isExt(out, ".wav") {
+		got, err := audio.ReadWavTags(out)
+		if err != nil {
+			return err.Error()
+		}
+		// Fold the expanded plan entries back to one "; "-joined value per
+		// key, the shape RIFF INFO stores.
+		byKey := map[string][]string{}
+		var order []string
+		for _, e := range want {
+			if _, ok := byKey[e.Key]; !ok {
+				order = append(order, e.Key)
+			}
+			byKey[e.Key] = append(byKey[e.Key], e.Value)
+		}
+		for _, k := range order {
+			vals, present := got[k]
+			if !present {
+				continue // INFO cannot express this key (e.g. ALBUMARTIST)
+			}
+			if j := strings.Join(byKey[k], "; "); strings.Join(vals, "; ") != j {
+				return fmt.Sprintf("%s = %q, want %q", k, strings.Join(vals, "; "), j)
+			}
+		}
+		return ""
+	}
 	if !isExt(out, ".flac") {
 		return ""
 	}
@@ -452,7 +480,6 @@ func checkTags(out string, tags []plan.Tag) string {
 			break
 		}
 	}
-	want := engine.Entries(tags)
 	if len(entries) != len(want) {
 		return fmt.Sprintf("got %d entries, want %d", len(entries), len(want))
 	}
@@ -733,12 +760,14 @@ func referenceMD5(o Options, runner engine.Runner, c check) (string, string, err
 			return "", "", rerr
 		}
 		var got string
-		got, rerr = runner.MD5OfFile(c.out)
+		got, rerr = runner.MD5OfFile(c.out, c.track.End-c.track.Start)
 		return ref, got, rerr
 	}
 
-	// Pure mode. APE (and any non-FLAC source) has no pure decoder at all.
-	if ext := strings.ToLower(filepath.Ext(c.src)); ext != ".flac" {
+	// Pure mode. FLAC and WAV have pure-Go paths; APE does not.
+	switch ext := strings.ToLower(filepath.Ext(c.src)); ext {
+	case ".flac", ".wav":
+	default:
 		return "", "", fmt.Errorf(
 			"%s sources have no pure decoder: --ref pure cannot verify them (use --ref ffmpeg)", ext)
 	}

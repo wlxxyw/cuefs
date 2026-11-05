@@ -67,37 +67,77 @@ func globToRegexp(g string) string {
 	return b.String()
 }
 
-// AlbumTags collects the album-level tags every track inherits. Real cue
-// sheets carry plenty of padding ("她说   CD2"), which we normalise on the way
-// in rather than copying verbatim into Navidrome's database.
-func AlbumTags(sheet *cue.Sheet, ignore *regexp.Regexp) []Tag {
-	t := map[string][]string{}
-	add := func(k, v string) { t[k] = append(t[k], v) }
+// baseExcluded are the keys the plan derives itself or that are technical
+// noise for a track file. An album file's own title is the ALBUM's name and
+// its track numbering describes the album as a whole; neither may leak into
+// a track's tags. CUESHEET is libFLAC's embedded copy of the cue sheet -
+// kilobytes of text, never useful per track.
+var baseExcluded = map[string]bool{
+	"TITLE": true, "TRACKNUMBER": true, "TRACKTOTAL": true, "TOTALTRACKS": true,
+	"CUESHEET": true,
+}
 
-	add("ALBUM", collapseWS(sheet.Title))
+// albumTagMap is the unfiltered album-level tag set: the source audio
+// file's tags as the base (DESIGN §2, the trackfs rule that is tuned for
+// Navidrome), then the cue sheet's album-level fields overriding per key.
+//
+// A cue sheet with only FILE/TRACK/INDEX lines therefore still produces
+// complete tags whenever the album file carries them, and vice versa: a rich
+// cue fills an album file that was ripped without tags.
+func albumTagMap(sheet *cue.Sheet, base map[string][]string) map[string][]string {
+	t := map[string][]string{}
+	for k, vs := range base {
+		if baseExcluded[strings.ToUpper(k)] {
+			continue
+		}
+		for _, v := range vs {
+			if v = strings.TrimSpace(v); v != "" {
+				t[k] = append(t[k], v)
+			}
+		}
+	}
+
+	// cue-level fields, replacing whatever the file carried for that key.
+	cueTags := map[string][]string{}
+	add := func(k, v string) {
+		if v = collapseWS(v); v != "" {
+			cueTags[k] = append(cueTags[k], v)
+		}
+	}
+	add("ALBUM", sheet.Title)
 	add("ALBUMARTIST", join(sheet.Performers...))
 	add("ARTIST", join(sheet.Performers...))
 	add("COMPOSER", join(sheet.Songwriters...))
 	add("CATALOGNUMBER", sheet.Catalog)
 
 	// REM key=value pairs; anything unrecognised is dropped, not guessed.
+	// A ";" inside a value stays part of it here: filterTags re-joins with
+	// "; " and Expand re-splits the multi-value keys into real comments.
 	for key, val := range sheet.Rem {
 		switch strings.ToUpper(key) {
 		case "DATE", "GENRE", "DISCNUMBER", "TOTALDISCS", "COMMENT":
 			add(strings.ToUpper(key), val)
 		}
 	}
-	return filterTags(t, ignore)
+	for k, vs := range cueTags {
+		t[k] = vs
+	}
+	return t
 }
 
-// TrackTags merges album tags with the track's own fields; the track
+// AlbumTags collects the album-level tags every track inherits: the source
+// file's tags as the base, overridden by the cue sheet per key (DESIGN §2).
+// Real cue sheets carry plenty of padding ("她说   CD2"), which we normalise
+// on the way in rather than copying verbatim into Navidrome's database.
+func AlbumTags(sheet *cue.Sheet, base map[string][]string, ignore *regexp.Regexp) []Tag {
+	return filterTags(albumTagMap(sheet, base), ignore)
+}
+
+// TrackTags merges the album tags with the track's own fields; the track
 // overrides TITLE/ARTIST/COMPOSER, which is precisely the rule trackfs uses
 // and what Navidrome's scanner behaves best with.
-func TrackTags(sheet *cue.Sheet, tr *cue.Track, ignore *regexp.Regexp) []Tag {
-	tags := map[string][]string{}
-	for _, tag := range AlbumTags(sheet, ignore) {
-		tags[tag.Key] = append(tags[tag.Key], tag.Value)
-	}
+func TrackTags(sheet *cue.Sheet, tr *cue.Track, base map[string][]string, ignore *regexp.Regexp) []Tag {
+	tags := albumTagMap(sheet, base)
 
 	if tr.Num > 0 {
 		tags["TRACKNUMBER"] = []string{fmt.Sprintf("%02d", tr.Num)}

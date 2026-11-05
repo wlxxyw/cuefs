@@ -274,6 +274,48 @@ ffmpeg 从 FLAC 路径退役为 APE 专用。帧索引器继续作为 FUSE 流�
 视图/产物树移除（没有 cue 的裸 ape 只会误导播放器）；`passthrough` 反向选择：
 cue 不隐藏，与 ape 原样透出（原样透传 ape 源与其 cue 文件）。
 
+#### 4.3.3 M4.6：标签合并落地（源文件为基底）与 WAV 标签容器
+
+DESIGN §2 的标签规则（"音频文件 tag 为基底；cue 覆盖"）在 plan 层落地：
+
+- **合并顺序**：`plan.TrackTags` = 源文件标签（`audio.ReadTags`：FLAC 读
+  Vorbis Comment、WAV 读 LIST INFO）→ cue 专辑级字段（`TITLE→ALBUM`、
+  `PERFORMER→ALBUMARTIST`、`SONGWRITER→COMPOSER`、`CATALOG`、REM 的
+  `DATE/GENRE/DISCNUMBER/TOTALDISCS/COMMENT`）→ cue 轨级字段，逐键后者覆盖
+  前者；`cue.ignore_tags` 对继承来的键同样生效。
+- **基底排除**：源文件的 `TITLE/TRACKNUMBER/TRACKTOTAL/TOTALTRACKS/CUESHEET`
+  不进分轨——专辑文件的标题是专辑名不是歌名，`CUESHEET` 是 libFLAC 塞在
+  源里的整份 cue 文本（每轨几 KB 的噪音）。源读不出来只降级为 cue-only 并
+  记 warning，绝不让标签问题挡分轨。
+- **WAV 输出的标签容器**：WAV 没有 Vorbis Comment，写一对块——ID3v2.4 块
+  （`ID3 `，taglib/Navidrome 读它；TRCK/TPOS 折叠轨号/碟号，TIT2/TPE1/TPE2/
+  TALB/TDRC/TCON/TCOM/TSRC/COMM/TXXX 全帧）+ RIFF `LIST INFO`
+  （INAM/IART/IPRD/ICRD/IGNR/ICMT，ffmpeg/资源管理器读它）+ `CSET`
+  （声明 UTF-8，否则 reader 按 RIFF 默认 Latin1 解码，中文乱码）。两者都
+  追加在 data 之后（taglib 自己也这么写），只改 RIFF size 字段；`retag`
+  遇到已有 tag 块走整文件重建（.part + rename），替换而非叠加。
+- **读回**：`audio.ReadWavTags` 解 LIST INFO 作为 WAV 源的基底；文本按
+  CSET 声明 → UTF-8 合法性 → 库的编码检测顺序解码，与 cue 检测同一套回退。
+- **verify**：`--ref pure` 对 WAV 源/产物用 data 切片字节 md5
+  （`audio.ChecksumWavWindow`，零解码），与 ffmpeg `-f md5` 同口径；
+  `checkTags` 对 WAV 比对 INFO 可表达的键子集。
+- **ffmpeg 参考侧的 span 截取**：`MD5OfFile(path, span)` 把产端解码裁到轨
+  声明的采样数（末轨从 STREAMINFO total 推导）。两个理由：与 pure 模式的
+  裁剪语义对齐；已测到 ffmpeg 解析器对 cuefs 写出的 FLAC（可变策略尾帧）
+  在 EOF 会**幻影多解一帧**（+4096 采样，解析器的 EOF padding 逻辑），
+  而 `cmp` 证明轨本身的字节与源窗口逐字节相同、Navidrome/taglib 读
+  STREAMINFO 时长也不受影响——污染只在"全文件解码"这一种取样方式里。
+- **守卫**：VERBATIM 子帧头是 `<0>pad + <6>type + <1>wasted` 共 8 bit——
+  漏写 wasted 位会让所有 reader 错位 1 bit（实测 mewkiz CRC-16 mismatch、
+  ffmpeg `invalid coding type`）。同理帧头位深要写**显式码**
+  （`000`=from-STREAMINFO 在 mewkiz 独立解析下等于 bps=0，读 0 位采样后
+  CRC-16 必然落在静音区）。`TestVerbatimFrameMewkizRoundTrip` 与
+  `TestRewriteHeaderRoundTrip` 用 mewkiz 独立解析回环锁死这两处布局。
+
+**实证**：王心凌 BEGIN（WAV 源）10 轨产出带 `title/artist/album/album_artist/
+date/genre/track=01/10`，`--ref ffmpeg` 与 `--ref pure` 双 10/10；在别处
+`--force` 重切后源文件的 `DISCID` 进入分轨（基底合并），双参考 10/10。
+
 ### 4.4 Plan 与尺寸一致性（trackfs 最大硬伤的修正）
 
 原则：**一个虚拟文件的 size 在其 manifest 生命周期内绝不变化。**
