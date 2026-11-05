@@ -39,10 +39,14 @@ type Options struct {
 	// Detection and naming, straight from the configuration.
 	Detect          cue.DetectOptions
 	SplitExtensions []string
-	ApeExt          string // extension of APE-converted tracks (others follow the source)
-	NameTemplate    string
-	MaxTitleLen     int
-	IgnoreTags      []string
+	// ApeMode matches config split.ape_mode (interpretation lives in
+	// library.ApeOf): APE pairs are transcoded (default), hidden together
+	// with their cue sheet, or passed through cue + ape untouched.
+	ApeMode      string
+	ApeExt       string // extension of APE-converted tracks (others follow the source)
+	NameTemplate string
+	MaxTitleLen  int
+	IgnoreTags   []string
 
 	// Synthesis knobs. FfmpegBin may be empty, in which case FLAC and APE
 	// tracks can only be served from the cache.
@@ -157,7 +161,8 @@ func Mount(mountpoint string, o Options, fuseExtra []string, allowOther bool) (*
 	}
 
 	sec := 5 * time.Second
-	o.Log("mount   : ape→%q, template %q, cache %q, src %q", o.ApeExt, o.NameTemplate, o.Cache, o.Src)
+	o.Log("mount   : ape_mode %q, ape→%q, template %q, cache %q, src %q",
+		o.ApeMode, o.ApeExt, o.NameTemplate, o.Cache, o.Src)
 	return fs.Mount(mountpoint, rootData.RootNode, &fs.Options{
 		EntryTimeout: &sec,
 		AttrTimeout:  &sec,
@@ -227,14 +232,30 @@ func (o *Root) buildView(relDir string) (*dirView, error) {
 		if e.IsDir() || !library.IsCueFile(name) {
 			continue
 		}
-		v.hide[name] = true // cue sheets never enter the virtual tree (D3)
 		cuePath := filepath.Join(srcDir, name)
+		// Cue sheets never enter the virtual tree (D3), except when an APE
+		// pair is passed through: playing a bare `.ape` again needs its cue.
+		v.hide[name] = true
 		entry := library.Classify(cuePath, o.opts.SplitExtensions, o.opts.Detect)
 		if entry.Kind != library.KindSplit {
 			for _, w := range entry.Warnings {
 				o.opts.Log("overlay : %s: %s", cuePath, w)
 			}
 			continue
+		}
+		// APE pairs obey ape_mode (DESIGN D14); the flow below is shared
+		// with flac/wav sources.
+		if library.IsApe(entry.SourcePath) {
+			switch library.ApeOf(o.opts.ApeMode) {
+			case library.ApeHide:
+				v.hide[filepath.Base(entry.SourcePath)] = true
+				o.opts.Log("overlay : %s: ape pair hidden (ape_mode=hide)", cuePath)
+				continue
+			case library.ApePassthrough:
+				delete(v.hide, name) // the cue rejoins its ape source
+				o.opts.Log("overlay : %s: ape pair passed through (ape_mode=passthrough)", cuePath)
+				continue
+			}
 		}
 		f, err := audio.ProbeAuto(entry.SourcePath, o.opts.FfprobeBin)
 		if err != nil {

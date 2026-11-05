@@ -110,6 +110,35 @@ func IsCueFile(name string) bool {
 	return strings.EqualFold(filepath.Ext(name), ".cue")
 }
 
+// ApeAction is what a split candidate with an APE source turns into
+// (DESIGN D14): the transcode split, a tree without the ape pair at all, or
+// the untouched cue + ape pair exposed as-is.
+type ApeAction string
+
+const (
+	ApeConvert     ApeAction = ""            // split normally (transcode via ffmpeg)
+	ApeHide        ApeAction = "hide"        // remove the ape source AND its cue from the view
+	ApePassthrough ApeAction = "passthrough" // expose the ape source and its cue untouched
+)
+
+// ApeOf resolves a configured ape_mode into the action; unknown or empty
+// values mean convert (config validation rejects the outright errors).
+func ApeOf(mode string) ApeAction {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "hide":
+		return ApeHide
+	case "passthrough":
+		return ApePassthrough
+	default:
+		return ApeConvert
+	}
+}
+
+// IsApe reports whether sourcePath is a Monkey's Audio image.
+func IsApe(sourcePath string) bool {
+	return strings.EqualFold(filepath.Ext(sourcePath), ".ape")
+}
+
 // Classify reads one cue file and decides what cuefs should do with it.
 // It only ever opens files for reading (DESIGN D15).
 func Classify(cuePath string, exts []string, opts cue.DetectOptions) Entry {

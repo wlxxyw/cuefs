@@ -29,6 +29,8 @@ split:
   # transcoded, and ape_convert_format says into what.
   ape_convert_format: flac      # container for APE sources: flac | wav
   ape_mode: convert             # convert | hide | passthrough (decision D14)
+                                #   hide: drop the ape source AND its cue sheet
+                                #   passthrough: expose the untouched cue + ape pair
   compression_level: 5          # FLAC compression level for ffmpeg (0-8)
 
 # --- cue sheets (DESIGN §4.1, §4.2) --------------------------------------

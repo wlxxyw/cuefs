@@ -660,6 +660,7 @@ func (c *commonFlags) options(w *workFlags) (split.Options, error) {
 		EncodingList:     c.cfg.Cue.EncodingList,
 		ForceEncoding:    c.encoding,
 		ApeExt:           c.cfg.ApeExt(),
+		ApeMode:          c.cfg.Split.ApeMode,
 		NameTemplate:     c.cfg.NameTemplate,
 		MaxTitleLen:      c.cfg.TitleMaxLen,
 		IgnoreTags:       c.cfg.Cue.IgnoreTags,

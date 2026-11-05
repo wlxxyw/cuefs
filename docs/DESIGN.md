@@ -270,7 +270,9 @@ ffmpeg 从 FLAC 路径退役为 APE 专用。帧索引器继续作为 FUSE 流�
 （M2 复用）。
 
 配置项 `split.ape_mode: convert | hide | passthrough`（默认 `convert`），
-`split.compression_level: 0-8`（默认 5）。
+`split.compression_level: 0-8`（默认 5）。`hide` 把 **ape 源与其 cue 一并**从
+视图/产物树移除（没有 cue 的裸 ape 只会误导播放器）；`passthrough` 反向选择：
+cue 不隐藏，与 ape 原样透出（原样透传 ape 源与其 cue 文件）。
 
 ### 4.4 Plan 与尺寸一致性（trackfs 最大硬伤的修正）
 

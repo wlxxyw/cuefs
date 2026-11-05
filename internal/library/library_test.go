@@ -250,3 +250,24 @@ func TestScanSkipsUnreadableDirs(t *testing.T) {
 		t.Fatalf("classified %d cues, want 1", n)
 	}
 }
+
+func TestApeOf(t *testing.T) {
+	cases := map[string]ApeAction{
+		"":            ApeConvert,
+		"convert":     ApeConvert,
+		" CONVERT ":   ApeConvert,
+		"hide":        ApeHide,
+		"Hide":        ApeHide,
+		"passthrough": ApePassthrough,
+		"PASSTHROUGH": ApePassthrough,
+		"weird":       ApeConvert,
+	}
+	for in, want := range cases {
+		if got := ApeOf(in); got != want {
+			t.Errorf("ApeOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if !IsApe("x.APE") || IsApe("x.flac") || IsApe("x.apelike") {
+		t.Error("IsApe must match only the .ape extension")
+	}
+}

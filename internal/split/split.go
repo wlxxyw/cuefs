@@ -38,6 +38,10 @@ type Options struct {
 	NameTemplate string
 	MaxTitleLen  int
 	IgnoreTags   []string
+	// ApeMode matches config split.ape_mode (interpretation lives in
+	// library.ApeOf): APE pairs are transcoded (default), dropped from the
+	// output tree together with their cue, or mirrored cue + ape untouched.
+	ApeMode string
 
 	// Engine
 	FfmpegBin        string
@@ -143,7 +147,13 @@ type Plan struct {
 	SelDirs map[string]bool // relative dirs kept during the walk
 	AllDirs bool            // mirror the whole tree (no --only filter)
 	Sampled map[string]bool // album sources that must not be copied
-	Entries []*library.Entry
+	// APE bookkeeping for ape_mode hide/passthrough (DESIGN D14): Hidden
+	// files never reach the output tree (the ape image and - deliberately -
+	// its cue sheet), while PassthroughCues are cue sheets copied verbatim
+	// next to their ape source.
+	Hidden          map[string]bool
+	PassthroughCues map[string]bool
+	Entries         []*library.Entry
 }
 
 // BuildPlan classifies the whole source tree and reflects every split
@@ -159,10 +169,12 @@ func BuildPlan(o Options) (*Plan, error) {
 	}
 	only := strings.ToLower(o.Only)
 	p := &Plan{
-		Root:    o.SrcRoot,
-		SelDirs: map[string]bool{".": true},
-		AllDirs: only == "",
-		Sampled: map[string]bool{},
+		Root:            o.SrcRoot,
+		SelDirs:         map[string]bool{".": true},
+		AllDirs:         only == "",
+		Sampled:         map[string]bool{},
+		Hidden:          map[string]bool{},
+		PassthroughCues: map[string]bool{},
 	}
 	entries := make([]*library.Entry, 0, 64)
 	if err := library.Scan(o.SrcRoot, o.SplitExtensions, o.detect(),
@@ -180,17 +192,37 @@ func BuildPlan(o Options) (*Plan, error) {
 	p.Entries = entries
 
 	for _, e := range entries {
-		if !p.Sampled[e.SourcePath] {
-			// Keep the cue's directory plus every ancestor selected, so
-			// --only never accidentally cuts the tree in half.
-			if rel, err := filepath.Rel(o.SrcRoot, filepath.Dir(e.CuePath)); err == nil {
-				for cur := filepath.ToSlash(rel); ; cur = filepath.Dir(cur) {
-					p.SelDirs[cur] = true
-					if cur == "." || cur == "/" {
-						break
-					}
+		// Keep the cue's directory plus every ancestor selected, so --only
+		// never accidentally cuts the tree in half. This runs before the
+		// APE decisions: a passthrough pair also needs its directory.
+		if rel, err := filepath.Rel(o.SrcRoot, filepath.Dir(e.CuePath)); err == nil {
+			for cur := filepath.ToSlash(rel); ; cur = filepath.Dir(cur) {
+				p.SelDirs[cur] = true
+				if cur == "." || cur == "/" {
+					break
 				}
 			}
+		}
+		// APE pairs obey ape_mode (DESIGN D14); the probe+plan flow below
+		// is shared with flac/wav sources.
+		if e.Kind == library.KindSplit && library.IsApe(e.SourcePath) {
+			switch library.ApeOf(o.ApeMode) {
+			case library.ApeHide:
+				// Drop the pair from the output tree: without the cue
+				// nobody mistakes the leftover ape for a playable album.
+				p.Hidden[e.SourcePath] = true
+				p.Hidden[e.CuePath] = true
+				o.Log("ape    : hidden (ape_mode=hide): %s", e.CuePath)
+				continue
+			case library.ApePassthrough:
+				// The unmodified pair is the deliverable: the ape source
+				// is mirrored (not Sampled) and the cue is allowed through.
+				p.PassthroughCues[e.CuePath] = true
+				o.Log("ape    : passthrough (ape_mode=passthrough): %s", e.CuePath)
+				continue
+			}
+		}
+		if !p.Sampled[e.SourcePath] {
 			// Reflect the source into a concrete plan.
 			f, err := audio.Probe(o.FfprobeBin, e.SourcePath)
 			if err != nil {
@@ -472,7 +504,15 @@ func mirror(o Options, p *Plan, st *Stats) error {
 			return nil
 		}
 		name := d.Name()
-		if strings.EqualFold(filepath.Ext(name), ".cue") || p.Sampled[path] {
+		if p.Hidden[path] {
+			// ape_mode=hide: the pair stays in the source, not in the tree.
+			return nil
+		}
+		if strings.EqualFold(filepath.Ext(name), ".cue") {
+			if !p.PassthroughCues[path] {
+				return nil
+			}
+		} else if p.Sampled[path] {
 			return nil
 		}
 		return passthrough(o, path, rel, st)

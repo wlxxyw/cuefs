@@ -80,6 +80,7 @@ func cmdMount(args []string, m *mountFlags) error {
 		Cache:            config.ExpandHome(m.cache),
 		Detect:           cue.DetectOptions{Force: c.encoding, List: c.cfg.Cue.EncodingList},
 		SplitExtensions:  c.cfg.Split.Extensions,
+		ApeMode:          c.cfg.Split.ApeMode,
 		ApeExt:           c.cfg.ApeExt(),
 		NameTemplate:     c.cfg.NameTemplate,
 		MaxTitleLen:      c.cfg.TitleMaxLen,
