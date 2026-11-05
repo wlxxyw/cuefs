@@ -21,8 +21,10 @@ type Split struct {
 	// A source file only becomes tracks when it has a sibling cue file of the
 	// same basename (or an embedded FLAC cuesheet).
 	Extensions []string `yaml:"extensions"`
-	// OutputFormat is the container of generated tracks: "flac" or "wav".
-	OutputFormat string `yaml:"output_format"`
+	// ApeConvertFormat is the container produced when ape_mode == "convert":
+	// "flac" (default) or "wav". APE is the only source that gets transcoded;
+	// every other listed format splits into the source's own extension.
+	ApeConvertFormat string `yaml:"ape_convert_format"`
 	// ApeMode selects what to do with Monkey's Audio sources:
 	// "convert" (default, transcode to FLAC in the cache), "hide" (drop from
 	// the virtual view) or "passthrough" (expose the source as-is).
@@ -86,7 +88,7 @@ func Defaults() *Config {
 		KeepAlbum:    false,
 		Split: Split{
 			Extensions:       []string{".flac", ".wav", ".ape"},
-			OutputFormat:     "flac",
+			ApeConvertFormat: "flac",
 			ApeMode:          "convert",
 			CompressionLevel: 5,
 		},
@@ -170,7 +172,7 @@ func applyYAML(cfg *Config, b []byte) error {
 		LogLevel     *string   `yaml:"log_level"`
 		Split        *struct {
 			Extensions       *[]string `yaml:"extensions"`
-			OutputFormat     *string   `yaml:"output_format"`
+			ApeConvertFormat *string   `yaml:"ape_convert_format"`
 			ApeMode          *string   `yaml:"ape_mode"`
 			CompressionLevel *int      `yaml:"compression_level"`
 		} `yaml:"split"`
@@ -217,7 +219,7 @@ func applyYAML(cfg *Config, b []byte) error {
 		if raw.Split.Extensions != nil {
 			cfg.Split.Extensions = normalizeExts(*raw.Split.Extensions)
 		}
-		set(&cfg.Split.OutputFormat, raw.Split.OutputFormat)
+		set(&cfg.Split.ApeConvertFormat, raw.Split.ApeConvertFormat)
 		set(&cfg.Split.ApeMode, raw.Split.ApeMode)
 		setInt(&cfg.Split.CompressionLevel, raw.Split.CompressionLevel)
 	}

@@ -39,7 +39,7 @@ type Options struct {
 	// Detection and naming, straight from the configuration.
 	Detect          cue.DetectOptions
 	SplitExtensions []string
-	Extension       string
+	ApeExt          string // extension of APE-converted tracks (others follow the source)
 	NameTemplate    string
 	MaxTitleLen     int
 	IgnoreTags      []string
@@ -61,8 +61,8 @@ func (o *Options) defaults() {
 	if len(o.SplitExtensions) == 0 {
 		o.SplitExtensions = []string{".flac", ".wav", ".ape"}
 	}
-	if o.Extension = plan.NormaliseExtension(o.Extension); o.Extension == "" {
-		o.Extension = ".flac"
+	if o.ApeExt = plan.NormaliseExtension(o.ApeExt); o.ApeExt == "" {
+		o.ApeExt = ".flac"
 	}
 	if o.NameTemplate == "" {
 		o.NameTemplate = "{num:02d} - {title}{ext}"
@@ -157,7 +157,7 @@ func Mount(mountpoint string, o Options, fuseExtra []string, allowOther bool) (*
 	}
 
 	sec := 5 * time.Second
-	o.Log("mount   : extension %q, template %q, cache %q, src %q", o.Extension, o.NameTemplate, o.Cache, o.Src)
+	o.Log("mount   : ape→%q, template %q, cache %q, src %q", o.ApeExt, o.NameTemplate, o.Cache, o.Src)
 	return fs.Mount(mountpoint, rootData.RootNode, &fs.Options{
 		EntryTimeout: &sec,
 		AttrTimeout:  &sec,
@@ -245,7 +245,7 @@ func (o *Root) buildView(relDir string) (*dirView, error) {
 		}
 		album, err := plan.Build(&entry, f, plan.Options{
 			SourceRoot: o.opts.Src, OutputRoot: o.opts.Cache,
-			Extension: o.opts.Extension, NameTemplate: o.opts.NameTemplate,
+			ApeExt: o.opts.ApeExt, NameTemplate: o.opts.NameTemplate,
 			MaxTitleLen: o.opts.MaxTitleLen, IgnoreTags: o.opts.IgnoreTags,
 		})
 		if err != nil {

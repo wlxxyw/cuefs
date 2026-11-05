@@ -235,7 +235,9 @@ ffmpeg -ss <floor(seconds)> -i SRC        -map 0:a:0 -vn -map_metadata -1 -map_c
 3. **STREAMINFO**：输出流的真实 MD5 在解码窗口时同步计算写入（和 ffmpeg
    `-f md5` 同口径：interleaved LE、Bits/8 字节），验证端可闭环。
 4. **引擎分派**（`engine/writer.go` `WriteTrack`）：`flac→flac`、`wav→wav`
-   纯 Go；`ape→flac` 走 ffmpeg（**ffmpeg 从此只服务 APE**）；其余组合报错。
+   纯 Go；`ape→flac`、`ape→wav` 走 ffmpeg（**ffmpeg 从此只服务 APE**，转码容器
+   由 `ape_convert_format` 决定，PCM 位深跟随源 16/24bit）；其余组合报错。
+   flac/wav 轨道一律使用源自身的扩展名（`plan.TrackExt`）。
    `flac→flac` 若遇到覆盖窗口之外的帧链死点（个别源文件中段有局部损坏，
    ffmpeg 靠重同步容错），自动落 ffmpeg fallback 保产出正确。
 5. **verify 参考模式**（`--ref auto|ffmpeg|pure`）：`auto` 有 ffmpeg 用 ffmpeg
@@ -377,7 +379,7 @@ Navidrome 的真实目录树**。
 
 ### 4.11 命名（D12）
 
-- 模板：`{num:02d} - {title}{ext}`（默认，`{ext}` 由 `output_format` 决定），`title_max_len: 60`。
+- 模板：`{num:02d} - {title}{ext}`（默认，`{ext}` 跟随源扩展名；APE 源用 `ape_convert_format` 定），`title_max_len: 60`。
 - 清洗：去 `/` 与控制字符、NUL → `_`、去尾部 `.`/空格、空标题回退 `NN.flac`、重名加 `(2)`。
 - `keep_album: false`（可开）保留整轨原文件。
 - **命名模板一旦上线不再变更**（改名 = Navidrome 全库重建，播放记录/收藏要重挂）。
@@ -404,7 +406,7 @@ keep_album: false
 
 split:
   extensions: [".flac", ".wav", ".ape"]
-  output_format: flac                # flac | wav（wav 输出仅支持 WAV 源，纯 Go 零 CPU）
+  ape_convert_format: flac           # APE 转码后的容器: flac | wav（非 APE 源一律按源扩展名切分）
   ape_mode: convert                  # convert | hide | passthrough
   compression_level: 5               # FLAC 压缩等级 0-8（交给 ffmpeg）
 

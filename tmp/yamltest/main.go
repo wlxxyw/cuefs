@@ -11,5 +11,5 @@ func main() {
 		fmt.Println("err:", err)
 		return
 	}
-	fmt.Println("from:", from, "outfmt:", cfg.Split.OutputFormat, "ext:", cfg.Split.Extensions)
+	fmt.Println("from:", from, "ape→fmt:", cfg.Split.ApeConvertFormat, "ext:", cfg.Split.Extensions)
 }

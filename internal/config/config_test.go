@@ -22,8 +22,8 @@ func TestDefaults(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("defaults must validate: %v", err)
 	}
-	if cfg.Split.OutputFormat != "flac" || cfg.Split.ApeMode != "convert" {
-		t.Errorf("defaults = %s/%s", cfg.Split.OutputFormat, cfg.Split.ApeMode)
+	if cfg.Split.ApeConvertFormat != "flac" || cfg.Split.ApeMode != "convert" {
+		t.Errorf("defaults = %s/%s", cfg.Split.ApeConvertFormat, cfg.Split.ApeMode)
 	}
 	if cfg.Cue.Encoding != "auto" {
 		t.Errorf("cue.encoding = %q", cfg.Cue.Encoding)
@@ -74,8 +74,8 @@ cue:
 	if cfg.NameTemplate == "" || cfg.TitleMaxLen != 60 {
 		t.Errorf("name settings lost: %q/%d", cfg.NameTemplate, cfg.TitleMaxLen)
 	}
-	if cfg.Split.OutputFormat != "flac" {
-		t.Errorf("output_format = %q", cfg.Split.OutputFormat)
+	if cfg.Split.ApeConvertFormat != "flac" {
+		t.Errorf("ape_convert_format = %q", cfg.Split.ApeConvertFormat)
 	}
 	// Extensions are normalised: lower-case, leading dot, duplicates kept out.
 	want := []string{".flac", ".flac", ".wav"}
@@ -126,7 +126,7 @@ func TestValidationRejectsBadEnums(t *testing.T) {
 		body string
 		want string
 	}{
-		{"output_format", "split:\n  output_format: ogg\n", "output_format"},
+		{"ape_convert_format", "split:\n  ape_convert_format: ogg\n", "ape_convert_format"},
 		{"ape_mode", "split:\n  ape_mode: maybe\n", "ape_mode"},
 		{"log_level", "log_level: chatty\n", "log_level"},
 		{"workers", "workers: 0\n", "workers"},

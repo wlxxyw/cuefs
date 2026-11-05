@@ -80,7 +80,7 @@ func cmdMount(args []string, m *mountFlags) error {
 		Cache:            config.ExpandHome(m.cache),
 		Detect:           cue.DetectOptions{Force: c.encoding, List: c.cfg.Cue.EncodingList},
 		SplitExtensions:  c.cfg.Split.Extensions,
-		Extension:        c.cfg.Split.OutputFormat,
+		ApeExt:           c.cfg.ApeExt(),
 		NameTemplate:     c.cfg.NameTemplate,
 		MaxTitleLen:      c.cfg.TitleMaxLen,
 		IgnoreTags:       c.cfg.Cue.IgnoreTags,
@@ -94,7 +94,7 @@ func cmdMount(args []string, m *mountFlags) error {
 		// synthesised with the external binary on demand.
 		o.FfmpegBin = c.cfg.FfmpegBin
 	} else {
-		log("mount   : flac/wav misses synthesise in pure Go; ape misses need --synthesize + ffmpeg_bin")
+		log("mount   : flac/wav tracks keep the source's extension (pure Go); ape tracks convert to %s and need --synthesize + ffmpeg_bin", o.ApeExt)
 	}
 
 	if info, err := os.Stat(m.mp); err != nil && os.IsNotExist(err) {

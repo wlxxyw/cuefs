@@ -8,10 +8,10 @@ import (
 // Validate checks enum-valued fields so that mistakes surface at startup
 // instead of during the first split.
 func (c *Config) Validate() error {
-	switch strings.ToLower(c.Split.OutputFormat) {
-	case "flac", "wav":
+	switch strings.ToLower(c.Split.ApeConvertFormat) {
+	case "", "flac", "wav":
 	default:
-		return fmt.Errorf("split.output_format must be flac or wav, got %q", c.Split.OutputFormat)
+		return fmt.Errorf("split.ape_convert_format must be flac or wav, got %q", c.Split.ApeConvertFormat)
 	}
 	if c.Split.CompressionLevel < 0 || c.Split.CompressionLevel > 8 {
 		return fmt.Errorf("split.compression_level must be 0-8, got %d", c.Split.CompressionLevel)
@@ -35,16 +35,17 @@ func (c *Config) Validate() error {
 	if c.TitleMaxLen < 1 {
 		return fmt.Errorf("title_max_len must be >= 1, got %d", c.TitleMaxLen)
 	}
-	// The template may hard-code an extension ("...{title}.flac") - that must
-	// match the output format, or people end up with misnamed files.
+	// flac and wav (and anything else listed in split.extensions) split into
+	// the source's own extension, and APE is transcoded - so a template that
+	// hard-codes one extension ("...{title}.flac") would misname every track
+	// whose source is a different format. {ext} is required instead.
 	tpl := strings.ToLower(c.NameTemplate)
-	ext := strings.ToLower(c.Split.OutputFormat)
 	if !strings.Contains(tpl, "{ext}") {
 		switch {
-		case strings.Contains(tpl, ".flac") && ext != "flac":
-			return fmt.Errorf("name_template hard-codes .flac but split.output_format is %q; use {ext} in the template", ext)
-		case strings.Contains(tpl, ".wav") && ext != "wav":
-			return fmt.Errorf("name_template hard-codes .wav but split.output_format is %q; use {ext} in the template", ext)
+		case strings.Contains(tpl, ".flac"):
+			return fmt.Errorf("name_template hard-codes .flac; use {ext} so the track extension follows the source format")
+		case strings.Contains(tpl, ".wav"):
+			return fmt.Errorf("name_template hard-codes .wav; use {ext} so the track extension follows the source format")
 		}
 	}
 	if c.Split.Extensions == nil || len(c.Split.Extensions) == 0 {
@@ -54,6 +55,15 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("cue.encoding must not be empty (use \"auto\")")
 	}
 	return nil
+}
+
+// ApeExt returns the track extension APE sources are transcoded into,
+// following split.ape_convert_format ("flac" is also the answer for "").
+func (c *Config) ApeExt() string {
+	if strings.EqualFold(c.Split.ApeConvertFormat, "wav") {
+		return ".wav"
+	}
+	return ".flac"
 }
 
 // IsSplitExt reports whether ext (lower-case, leading dot) is eligible for

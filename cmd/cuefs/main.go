@@ -659,7 +659,7 @@ func (c *commonFlags) options(w *workFlags) (split.Options, error) {
 		SplitExtensions:  c.cfg.Split.Extensions,
 		EncodingList:     c.cfg.Cue.EncodingList,
 		ForceEncoding:    c.encoding,
-		Extension:        c.cfg.Split.OutputFormat,
+		ApeExt:           c.cfg.ApeExt(),
 		NameTemplate:     c.cfg.NameTemplate,
 		MaxTitleLen:      c.cfg.TitleMaxLen,
 		IgnoreTags:       c.cfg.Cue.IgnoreTags,
@@ -685,9 +685,6 @@ func cmdSplit(args []string) error {
 	}
 	if err := c.load(); err != nil {
 		return err
-	}
-	if c.cfg.Split.OutputFormat == "" {
-		return fmt.Errorf("set split.output_format to flac or wav")
 	}
 	o, err := c.options(w)
 	if err != nil {

@@ -43,23 +43,33 @@ type Album struct {
 
 // Options parameterises planning.
 type Options struct {
-	SourceRoot   string
-	OutputRoot   string
-	Extension    string
+	SourceRoot string
+	OutputRoot string
+	// ApeExt is the track extension for APE sources (which are transcoded);
+	// every other source keeps its own extension. Default ".flac".
+	ApeExt       string
 	NameTemplate string
 	MaxTitleLen  int
 	IgnoreTags   []string
 }
 
 func (o *Options) defaults() {
-	if o.Extension == "" {
-		o.Extension = ".flac"
-	} else if !strings.HasPrefix(o.Extension, ".") {
-		o.Extension = "." + o.Extension
+	if o.ApeExt = NormaliseExtension(o.ApeExt); o.ApeExt == "" {
+		o.ApeExt = ".flac"
 	}
 	if o.NameTemplate == "" {
 		o.NameTemplate = "{num:02d} - {title}{ext}"
 	}
+}
+
+// TrackExt is the output extension implied by one source path: flac and wav
+// (and any other listed format) split into themselves, APE is transcoded into
+// the configured convert format.
+func TrackExt(sourcePath, apeExt string) string {
+	if strings.EqualFold(filepath.Ext(sourcePath), ".ape") {
+		return apeExt
+	}
+	return strings.ToLower(filepath.Ext(sourcePath))
 }
 
 // Build assembles the plan for one classified cue entry. The audio probe is
@@ -126,7 +136,7 @@ func Build(e *library.Entry, f *audio.Format, opts Options) (*Album, error) {
 		}
 
 		name := TrackFileName(opts.NameTemplate, tr.Num, tr.Title,
-			opts.MaxTitleLen, opts.Extension, taken)
+			opts.MaxTitleLen, TrackExt(e.SourcePath, opts.ApeExt), taken)
 		album.Tracks = append(album.Tracks, &Track{
 			Num:   tr.Num,
 			Title: tr.Title,

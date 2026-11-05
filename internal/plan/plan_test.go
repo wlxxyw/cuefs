@@ -1,10 +1,13 @@
 package plan
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"cuefs/internal/audio"
 	"cuefs/internal/cue"
+	"cuefs/internal/library"
 )
 
 func parseTagCue() (*cue.Sheet, error) {
@@ -203,5 +206,45 @@ func TestIgnoreTagGlobs(t *testing.T) {
 	// An escaped glob is still valid input.
 	if _, err := IgnoreTagsRe([]string{"(balanced)"}); err != nil {
 		t.Errorf("harmless glob rejected: %v", err)
+	}
+}
+
+func TestBuildFollowsSourceExtension(t *testing.T) {
+	sheet, err := parseTagCue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &audio.Format{Codec: "wav", SampleRate: 44100, Channels: 2, BitsPerSample: 16}
+	cases := []struct {
+		src, apeExt, wantExt string
+	}{
+		{"x.flac", "", ".flac"},
+		{"x.wav", "", ".wav"},
+		{"x.WAV", "", ".wav"},
+		// Naming follows the source for any listed format; whether the
+		// engine can actually cut it is a separate gate (writer support).
+		{"x.m4a", "", ".m4a"},
+		{"x.ape", ".wav", ".wav"},
+		{"x.ape", "", ".flac"},
+	}
+	for _, c := range cases {
+		opts := Options{SourceRoot: "lib", OutputRoot: "out", NameTemplate: "{num:02d}{ext}"}
+		if c.apeExt != "" {
+			opts.ApeExt = c.apeExt
+		}
+		album, err := Build(&library.Entry{
+			CuePath:    filepath.Join("lib", "album.cue"),
+			SourcePath: filepath.Join("lib", c.src),
+			Kind:       library.KindSplit,
+			Sheet:      sheet,
+		}, f, opts)
+		if err != nil {
+			t.Fatalf("%s: %v", c.src, err)
+		}
+		for _, tr := range album.Tracks {
+			if got := strings.ToLower(filepath.Ext(tr.Name)); got != c.wantExt {
+				t.Errorf("%s: track name %q does not end in %q", c.src, tr.Name, c.wantExt)
+			}
+		}
 	}
 }

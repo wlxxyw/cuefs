@@ -14,15 +14,11 @@ import (
 // funnel their synthesis requests through it so that a cache entry written by
 // one is byte-identical to what the other would produce.
 type Options struct {
-	FfmpegBin        string // optional: FLAC/APE audio movement only
+	FfmpegBin        string // optional: APE conversion and FLAC fallback only
 	CompressionLevel int
-	Extension        string // output extension, ".flac" or ".wav"
 }
 
 func (o *Options) defaults() {
-	if o.Extension = plan.NormaliseExtension(o.Extension); o.Extension == "" {
-		o.Extension = ".flac"
-	}
 	if o.CompressionLevel <= 0 {
 		o.CompressionLevel = 5
 	}
@@ -53,26 +49,33 @@ func WriteTrack(src string, facts Facts, t *plan.Track, out string, o Options) e
 		return writeFlac(src, facts, t, out, o)
 	case isExt(src, ".wav") && isExt(out, ".wav"):
 		return writeWav(src, t, out)
-	case isExt(src, ".ape") && isExt(out, ".flac"):
-		// APE → FLAC is the one path that always needs ffmpeg (DESIGN
-		// D-series: ffmpeg is demoted to APE-only). WAV sources also fall
-		// back here when the output is FLAC, since a RIFF passthrough
-		// cannot author FLAC metadata.
+	case isExt(src, ".ape") && (isExt(out, ".flac") || isExt(out, ".wav")):
+		// APE is the one source that must be transcoded (DESIGN D-series:
+		// ffmpeg is demoted to APE-only), into the configured convert format.
 		if o.FfmpegBin == "" {
-			return fmt.Errorf("ape/wav → flac needs ffmpeg_bin (only flac→flac and wav→wav are pure Go)")
+			return fmt.Errorf("ape → %s needs ffmpeg_bin (only flac→flac and wav→wav are pure Go)",
+				filepath.Ext(out))
 		}
-		r := Runner{FfmpegBin: o.FfmpegBin, CompressionLevel: o.CompressionLevel}
+		r := Runner{
+			FfmpegBin:        o.FfmpegBin,
+			CompressionLevel: o.CompressionLevel,
+		}
+		if isExt(out, ".wav") {
+			r.OutCodec = wavPCMCodec(facts.Bits)
+		}
 		if err := r.Split(src, facts.SampleRate, t, out); err != nil {
 			return err
 		}
-		if err := audio.WriteVorbisComment(out, Entries(t.Tags)); err != nil {
-			// The audio is fine; report but keep the file.
-			return fmt.Errorf("audio written but metadata rewrite failed: %w", err)
+		if isExt(out, ".flac") {
+			if err := audio.WriteVorbisComment(out, Entries(t.Tags)); err != nil {
+				// The audio is fine; report but keep the file.
+				return fmt.Errorf("audio written but metadata rewrite failed: %w", err)
+			}
 		}
 		return nil
 	default:
-		return fmt.Errorf("unsupported output %q for source %q (only flac→flac, wav→wav and ape→flac are supported)",
-			o.Extension, src)
+		return fmt.Errorf("cannot produce %q from a %q source (only flac→flac, wav→wav, ape→flac and ape→wav are supported)",
+			filepath.Ext(out), filepath.Ext(src))
 	}
 }
 

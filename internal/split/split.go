@@ -34,7 +34,7 @@ type Options struct {
 	ForceEncoding   string
 
 	// Naming / tags
-	Extension    string // extension of the generated tracks
+	ApeExt       string // extension of APE-converted tracks (others follow the source)
 	NameTemplate string
 	MaxTitleLen  int
 	IgnoreTags   []string
@@ -75,8 +75,8 @@ func (o *Options) defaults() {
 	if len(o.SplitExtensions) == 0 {
 		o.SplitExtensions = []string{".flac", ".wav", ".ape"}
 	}
-	if o.Extension == "" {
-		o.Extension = ".flac"
+	if o.ApeExt == "" {
+		o.ApeExt = ".flac"
 	}
 	if o.NameTemplate == "" {
 		o.NameTemplate = "{num:02d} - {title}{ext}"
@@ -199,7 +199,7 @@ func BuildPlan(o Options) (*Plan, error) {
 			}
 			album, err := plan.Build(e, f, plan.Options{
 				SourceRoot: o.SrcRoot, OutputRoot: o.OutRoot,
-				Extension: o.Extension, NameTemplate: o.NameTemplate,
+				ApeExt: o.ApeExt, NameTemplate: o.NameTemplate,
 				MaxTitleLen: o.MaxTitleLen, IgnoreTags: o.IgnoreTags,
 			})
 			if err != nil {
@@ -343,7 +343,6 @@ func writeTrack(o Options, album *plan.Album, t *plan.Track, st *Stats) {
 	}, t, out, engine.Options{
 		FfmpegBin:        o.FfmpegBin,
 		CompressionLevel: o.CompressionLevel,
-		Extension:        o.Extension,
 	}); err != nil {
 		st.TracksFailed++
 		st.Errors++

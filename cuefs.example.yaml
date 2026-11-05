@@ -24,7 +24,10 @@ keep_album: false               # keep the source album file in the view
 # --- splitting (DESIGN §4.3) ---------------------------------------------
 split:
   extensions: [".flac", ".wav", ".ape"]
-  output_format: flac           # flac (ffmpeg audio) | wav (pure Go, WAV sources only)
+  # Tracks of any source listed here keep the source's own extension
+  # (.flac -> .flac, .wav -> .wav, ...). APE is the exception: it must be
+  # transcoded, and ape_convert_format says into what.
+  ape_convert_format: flac      # container for APE sources: flac | wav
   ape_mode: convert             # convert | hide | passthrough (decision D14)
   compression_level: 5          # FLAC compression level for ffmpeg (0-8)
 

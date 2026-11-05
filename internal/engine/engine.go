@@ -17,6 +17,9 @@ import (
 type Runner struct {
 	FfmpegBin        string
 	CompressionLevel int
+	// OutCodec names the output audio encoding: "flac" (default) or a
+	// lossless PCM encoder ("pcm_s16le" &co) when the output is a WAV.
+	OutCodec string
 }
 
 func (r *Runner) defaults() {
@@ -51,15 +54,31 @@ func (r *Runner) SplitArgs(src string, rate int, t *plan.Track, out string) []st
 		length := float64(t.End-t.Start) / rate
 		args = append(args, "-t", fmt.Sprintf("%.20g", length+1.0))
 	}
-	args = append(args,
-		// The output is renamed to its final name afterwards, so the muxer
-		// cannot be guessed from the ".part" extension. Tags are NOT written
-		// here: the metadata stream is authored by cuefs itself so that
-		// multi-value Vorbis comments survive (DESIGN §4.3, M4).
-		"-c:a", "flac", "-f", "flac",
-		"-compression_level", strconv.Itoa(r.CompressionLevel),
-	)
+	// The output is renamed to its final name afterwards, so the muxer
+	// cannot be guessed from the ".part" extension. Tags are NOT written
+	// here: the metadata stream is authored by cuefs itself so that
+	// multi-value Vorbis comments survive (DESIGN §4.3, M4).
+	switch r.OutCodec {
+	case "", "flac":
+		args = append(args, "-c:a", "flac", "-f", "flac",
+			"-compression_level", strconv.Itoa(r.CompressionLevel))
+	default:
+		args = append(args, "-c:a", r.OutCodec, "-f", "wav")
+	}
 	return append(args, out)
+}
+
+// wavPCMCodec picks the PCM lossless encoder whose bit depth matches the
+// source stream, so a 24-bit APE lands in the output without precision loss.
+func wavPCMCodec(bits int) string {
+	switch bits {
+	case 24:
+		return "pcm_s24le"
+	case 32:
+		return "pcm_s32le"
+	default:
+		return "pcm_s16le"
+	}
 }
 
 // Split runs ffmpeg for one track, writing to tmp first and renaming to out
