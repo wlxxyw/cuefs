@@ -135,10 +135,13 @@ func (r *Runner) MD5OfWindow(src string, rate int, t *plan.Track) (string, error
 // longer catch a decoder bug on its own. Reports the window's span, the exact
 // sample count the production side must cover for the comparison to be sound.
 //
+// idxr shares the per-source index across a verify run's tracks (nil indexes
+// the source for this call only, the single-shot contract).
+//
 // A frame chain that dead-ends is tolerated as long as the covered prefix
 // contains the whole window: the coverage boundary and the stats are those of
 // the CRC-anchored chain, which is what a splitter would rely on too.
-func MD5OfWindowPure(src string, t *plan.Track, bits int) (string, int64, error) {
+func MD5OfWindowPure(src string, t *plan.Track, bits int, idxr audio.IndexResolver) (string, int64, error) {
 	if isWav(src) {
 		// WAV windows are byte slices of the data chunk; no index needed.
 		end := t.End
@@ -158,6 +161,9 @@ func MD5OfWindowPure(src string, t *plan.Track, bits int) (string, int64, error)
 		return hex.EncodeToString(sum), span, nil
 	}
 	idx, err := audio.IndexFlacFrames(src)
+	if idxr != nil {
+		idx, err = idxr.Index(src)
+	}
 	end := t.End
 	if end < 0 {
 		// The last track runs to the end of the (covered) stream.

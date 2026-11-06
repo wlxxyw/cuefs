@@ -16,6 +16,11 @@ import (
 type Options struct {
 	FfmpegBin        string // optional: APE conversion and FLAC fallback only
 	CompressionLevel int
+
+	// Indexer shares one frame index per source file across the run's
+	// tracks; nil makes every split index its source itself (the
+	// single-shot contract of audio.IndexFlacFrames).
+	Indexer audio.IndexResolver
 }
 
 func (o *Options) defaults() {
@@ -126,6 +131,7 @@ func writeFlac(src string, facts Facts, t *plan.Track, out string, o Options) er
 		Channels:   facts.Channels,
 		Bits:       facts.Bits,
 		Tags:       Entries(t.Tags),
+		Indexer:    o.Indexer,
 	}, out)
 	if err == nil {
 		return nil

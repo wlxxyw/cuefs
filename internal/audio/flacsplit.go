@@ -16,6 +16,13 @@ type SplitSpec struct {
 	Channels   int
 	Bits       int
 	Tags       []VorbisEntry
+
+	// Indexer resolves the source's frame index; nil means "index it
+	// here" (one full CRC-16 walk per call). Runs that cut many tracks
+	// from one source share a single walk through an IndexCache: without
+	// one, a 300 MB album is walked once per track - the same bytes out of
+	// the page cache, N times.
+	Indexer IndexResolver
 }
 
 // strategy is the header-number coding a frame of the new stream uses. The
@@ -68,6 +75,9 @@ func WriteFLACTrack(spec SplitSpec, out string) error {
 	// and keeps whatever it indexed before the break. Windows inside that
 	// covered prefix are exact; beyond it there is nothing to splice.
 	idx, err := IndexFlacFrames(spec.Src)
+	if spec.Indexer != nil {
+		idx, err = spec.Indexer.Index(spec.Src)
+	}
 	if err != nil {
 		if len(idx.Frames) == 0 {
 			return err

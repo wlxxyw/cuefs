@@ -316,6 +316,34 @@ DESIGN §2 的标签规则（"音频文件 tag 为基底；cue 覆盖"）在 pla
 date/genre/track=01/10`，`--ref ffmpeg` 与 `--ref pure` 双 10/10；在别处
 `--force` 重切后源文件的 `DISCID` 进入分轨（基底合并），双参考 10/10。
 
+#### 4.3.4 M4.7：源文件索引每运行一次（去重复索引）
+
+`split`/`verify` 原本**每轨各做一次**源文件帧索引
+（`IndexFlacFrames`，CRC-16 锚定的 O(file) 走链）：10 轨的专辑把同一个
+300 MB 源走 10 遍——同样的字节、同样的页缓存,放大的只有时间与
+I/O 压力。M4.7 引入 `audio.IndexCache`（`flacindexcache.go`）：
+
+- **线程模型**：缓存实现 `IndexResolver`（`Index(path) → (index, error)`，
+  与单发 `IndexFlacFrames` 同契约——链断文件照样返回部分链 + error）。
+  `split.Materialize`/`Verify` 每运行建一个,经 `engine.Options.Indexer` →
+  `SplitSpec.Indexer` 传到 FLAC/WAV 分轨与 pure 参考解码；worker 并发  
+  由**进行中去重**兜住：首个 stat-miss 者当 leader 走链,其余子 job 等待  
+  同一份结果而不是各开各的（否则 4 worker 反而同时开 4 条走链）。
+- **新鲜度**：条目绑定走链时的 size+mtime,每次命中重 stat 校验——运行
+  中被改写的源（如 retag）不会被旧索引毒害;`(index, error)` 的失败结果
+  **不缓存**,后续调用会重走,以观察被外部修复的文件。
+- **有界**：LRU 上限 32（~0.6 MB/张,满配 19 MB 内存）;挂载后的 FUSE  
+  合成路径不共享（长驻进程,维持原先每轨一发行为）。
+- **边界**：FLAC 边界帧的 mewkiz 解码每轨仍各自做（轨间无重叠可共享,
+  最多两帧,可忽略）;单发命令（`flacinfo`/`debugmd5`）契约不变。
+
+**实证**：乐行者（275 MB / 11 轨
+）探针统计 `split --force` 走链 **11 → 1**,`verify --ref pure` **11 → 1**
+（`CUEFS_INDEX_DEBUG` 临时计数;正式代码无此开关）。冷走链实测约 38 s
+墙钟（306 MB 在别处,磁盘为瓶颈）/ 暖约 4 s,即整库重切/重验省下
+(轨数-专辑数) 次走链;墙钟大头仍是 mewkiz 全轨解码（STREAMINFO 真实
+MD5 所需,分轨内不可省）。
+
 ### 4.4 Plan 与尺寸一致性（trackfs 最大硬伤的修正）
 
 原则：**一个虚拟文件的 size 在其 manifest 生命周期内绝不变化。**

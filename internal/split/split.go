@@ -48,6 +48,10 @@ type Options struct {
 	FfprobeBin       string
 	CompressionLevel int
 
+	// Indexer shares one frame index per source file across the run (nil
+	// until a run makes one; index and fresh-mtime checks live here).
+	Indexer *audio.IndexCache
+
 	// Behaviour
 	Workers int
 	Force   bool   // rebuild even when the output file already exists
@@ -65,6 +69,15 @@ func (o *Options) defaultsRef() {
 	case "ffmpeg", "pure":
 	default:
 		o.Reference = "auto"
+	}
+}
+
+// makeIndexer gives the run its per-source index cache. Every command that
+// re-writes audio calls this once at entry: with tracks ordered by album, one
+// walk per source replaces one walk per track.
+func (o *Options) makeIndexer() {
+	if o.Indexer == nil {
+		o.Indexer = audio.NewIndexCache(0)
 	}
 }
 
@@ -270,6 +283,7 @@ func albumExtractorNeeded(a *plan.Album) bool {
 // Materialize writes the planned library into OutRoot.
 func Materialize(o Options) (*Stats, error) {
 	o.defaults()
+	o.makeIndexer()
 	st := &Stats{}
 	p, err := BuildPlan(o)
 	if err != nil {
@@ -375,6 +389,7 @@ func writeTrack(o Options, album *plan.Album, t *plan.Track, st *Stats) {
 	}, t, out, engine.Options{
 		FfmpegBin:        o.FfmpegBin,
 		CompressionLevel: o.CompressionLevel,
+		Indexer:          o.Indexer,
 	}); err != nil {
 		st.TracksFailed++
 		st.Errors++
@@ -643,6 +658,7 @@ func prettify(o Options, p string) string {
 // the source window the plan claims it came from (DESIGN §6, M1 acceptance).
 func Verify(o Options) (*VerifyStats, error) {
 	o.defaults()
+	o.makeIndexer()
 	st := &VerifyStats{}
 	p, err := BuildPlan(o)
 	if err != nil {
@@ -771,7 +787,7 @@ func referenceMD5(o Options, runner engine.Runner, c check) (string, string, err
 		return "", "", fmt.Errorf(
 			"%s sources have no pure decoder: --ref pure cannot verify them (use --ref ffmpeg)", ext)
 	}
-	sum, span, perr := engine.MD5OfWindowPure(c.src, c.track, c.bits)
+	sum, span, perr := engine.MD5OfWindowPure(c.src, c.track, c.bits, o.Indexer)
 	if perr != nil {
 		return "", "", perr
 	}
