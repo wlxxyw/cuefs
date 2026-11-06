@@ -56,6 +56,12 @@ type Options struct {
 	Workers           int
 	FakeStreamInfoMD5 bool // split.streaminfo_md5 shares the split's config value
 
+	// The cache bookkeeping's budget and expiry, straight from the config
+	// (the same keys split.Prune reports): the periodic task evicts whole
+	// albums by TTL (CacheTTL) and overhead (CacheMaxGB).
+	CacheMaxGB int
+	CacheTTL   time.Duration
+
 	Log func(format string, args ...any)
 }
 
@@ -117,6 +123,11 @@ type Root struct {
 	synth  chan struct{} // bounds concurrent synthesis jobs
 	onceMu sync.Mutex
 	once   map[string]*sync.Once
+
+	// gc keeps the cache-management bookkeeping (DESIGN §4.8): the source
+	// mtime table (per album, complete) and the access table (per track,
+	// capped/lossy), plus the periodic task's cadence.
+	gc *gcState
 }
 
 type overlayNode struct {
@@ -147,6 +158,8 @@ func Mount(mountpoint string, o Options, fuseExtra []string, allowOther bool) (*
 		synth:        make(chan struct{}, o.Workers),
 		once:         map[string]*sync.Once{},
 	}
+	root.gc = newGCState()
+	go root.gcLoop()
 	rootData.NewNode = func(_ *fs.LoopbackRoot, _ *fs.Inode, _ string, _ *syscall.Stat_t) fs.InodeEmbedder {
 		// Virtual track names never reach the loopback lookup, because
 		// overlayNode.Lookup intercepts them; whatever this hook produces is
@@ -274,6 +287,7 @@ func (o *Root) buildView(relDir string) (*dirView, error) {
 			o.opts.Log("overlay : %s: %v", cuePath, err)
 			continue
 		}
+		o.gc.register(album)
 		v.albums = append(v.albums, album)
 		v.hide[filepath.Base(album.SourcePath)] = true
 		for _, t := range album.Tracks {

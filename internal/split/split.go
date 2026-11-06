@@ -57,6 +57,10 @@ type Options struct {
 	// split and mount read the same config value here.
 	FakeStreamInfoMD5 bool
 
+	// Cache budget and TTL, straight from the config: gc/mount bookkeeping.
+	CacheMaxGB int
+	CacheTTL   time.Duration
+
 	// Behaviour
 	Workers int
 	Force   bool   // rebuild even when the output file already exists
@@ -134,6 +138,9 @@ type Stats struct {
 	OtherBytes    uint64
 	Warnings      int
 	Errors        int
+	// The cache tree as it stood after the run's gc pass (report only).
+	CacheFiles int
+	CacheBytes uint64
 }
 
 // Report prints a human summary.
@@ -347,6 +354,21 @@ func Materialize(o Options) (*Stats, error) {
 		st.Errors += localStats[i].Errors
 	}
 	mu.Unlock()
+
+	pst, gerr := Prune(o)
+	if gerr != nil {
+		o.Log("gc     : prune failed: %v", gerr)
+	} else if pst.OrphanFiles > 0 || pst.PartFiles > 0 || pst.OrphanDirs > 0 {
+		o.Log("gc     : pruned %d orphan file(s), %d stale .part, %d empty dir(s) (%.1f MiiB freed)",
+			pst.OrphanFiles, pst.PartFiles, pst.OrphanDirs,
+			float64(pst.OrphanBytes+pst.PartBytes)/(1<<20))
+	}
+	st.CacheBytes = pst.CacheBytes
+	st.CacheFiles = pst.CacheFiles
+	if pst.OverBudget {
+		o.Log("gc     : cache %s over cache_max_gb %d - the mount's periodic task evicts least-recently-accessed album(s)",
+			humanBytes(pst.CacheBytes), o.CacheMaxGB)
+	}
 
 	return st, mirror(o, p, st)
 }

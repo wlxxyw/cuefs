@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"cuefs/internal/audio"
 	"cuefs/internal/config"
@@ -20,7 +21,7 @@ import (
 	"cuefs/internal/split"
 )
 
-const version = "0.2.0-m4.8"
+const version = "0.2.0-m4.9"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -36,6 +37,8 @@ func main() {
 		err = cmdScan(args)
 	case "split":
 		err = cmdSplit(args)
+	case "gc":
+		err = cmdGc(args)
 	case "verify":
 		err = cmdVerify(args)
 	case "mount":
@@ -75,6 +78,7 @@ Commands:
   probe     Report how a cue file's encoding was detected and whether it parses
   scan      Classify every cue file under a directory (read-only)
   split     Materialise tracks + passthrough into an output tree
+  gc        Prune cache orphans (sources gone) and report the size budget
   verify    Re-decode the produced tracks and compare PCM md5 against the source
   retag     Rewrite the metadata stream of the generated tracks in place
   flacinfo  Dump a FLAC file's metadata blocks and frame chain (no decoding)
@@ -674,6 +678,8 @@ func (c *commonFlags) options(w *workFlags) (split.Options, error) {
 		Link:              w.link,
 		Only:              w.only,
 		Dry:               w.dry,
+		CacheMaxGB:        c.cfg.CacheMaxGB,
+		CacheTTL:          time.Duration(c.cfg.CacheTTL.Duration),
 		Log:               log,
 	}, nil
 }

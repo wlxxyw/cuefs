@@ -345,7 +345,6 @@ I/O 压力。M4.7 引入 `audio.IndexCache`（`flacindexcache.go`）：
 MD5 所需,分轨内不可省）。
 
 #### 4.3.5 M4.8：`split.fake_streaminfo_md5`——md5 让位,解码只保留边界
-
 真实 STREAMINFO MD5 的价格是**每条轨做完整体解码**（算 md5 就是"解码出的
 PCM 拼一起"),FLAC 分轨的 CPU 账单来自这里（实测在别处 306 MB 专辑
 `split --force` 12 分钟内 85% 为 mewkiz 解码 + 全轨 PCM 内存驻留 GC）。
@@ -362,6 +361,49 @@ PCM 拼一起"),FLAC 分轨的 CPU 账单来自这里（实测在别处 306 MB �
 - **一致性约束**：`split` 与 mount 的 FUSE 合成吃**同一个配置值**
   （键改在 engine 分派层）——同一轨无论谁先写,字节一致;配置切换不回写
   旧文件（skip 语义看存在性,与 tag 模板变更相同）。
+
+#### 4.3.6 M4.9：缓存管理——`gc` 命令、源变更失效与 mount 周期任务
+
+`cache_max_gb`/`cache_ttl` 此前只是被解析,从无消费者。落地规则(协同三入口,
+共享 `split.Prune`/`split.CacheSize` 同一库函数):
+
+- **`cuefs gc`(离线维护入口)**:只做两件事——(a) 用 BuildPlan 全树对账
+  (预期集 = 分轨 + cover.jpg + mirror() 透传规则重放,与 split 的写出
+  完全一致),删除 plan 外的孤儿文件与空目录,以及 >24h 的 `.part` 残留;
+  (b) 报告 cache 体积/预算余量/TTL 配置。**不做 TTL/size 驱逐**:离线
+  进程拿不到新鲜访问时间(relatime 的 atime 只有天级粒度),文件可能正被
+  读——驱逐留给 mount 的周期任务。`split` 跑完自动附带同一次 prune
+  (在 mirror 之后调用),`Retag`/`verify` 不做(无产出写入)。
+
+- **mount 的两张内存表(方案二的落点)**:
+  - **源 mtime 表**:`cuePath → {album 计划, max(src,cue) mtime}`。
+    **完整且永不逐出**——丢条目 = 失效检测漏源;体积极小(每专辑一条,
+    全库 72 键)。buildView 分类时注册,mount 启动时后台扫一遍全部
+    持 cue 目录补齐。
+  - **访问表**:`cachePath → lastAccess`。有损设计,LRU 上限 8192
+    (超限在下一个 tick 丢弃最旧一半,丢失即"冷",用生成文件自身 mtime
+    兜底——batch split 写出的文件 mtime 也因此天然不被立刻驱逐)。
+    记录点:`trackNode.Open`(读打开 = 访问;attr/search 流量刻意忽略,
+    扫描器 stat 不算"被听")与合成完成时。
+- **周期任务(1 min 一轮,顺序固定)**:
+  1. **失效优先**:表内专辑逐一 stat cue+src——消失 ⇒ 整目录 prune;
+     mtime 变新 ⇒ **整专辑一起删**(避免任何半再生状态),但须全部轨
+     皆过 **5 min 访问宽限**(3.1);宽限期内**不推进**记录的 mtime
+     (3.2),下一轮重判。删除后 mount 视图自愈:轨目录不来自缓存树,
+     按需 `Materialize` 重合成;`Materialize` 的 once 语义修正为
+     检测到"once 已消费但文件不在"时**直接补合成一次**,避免把删除后
+     的首个读暴露成 EIO。
+  2. **TTL**:`album lastAccess(= 各轨 max(表, 文件 mtime) 的最大值)`
+     距今超过 `cache_ttl` ⇒ 整目录删除(有轨被宽限内访问过则跳过)。
+  3. **size 预算**:整 cache 树超过 `cache_max_gb` ⇒ 按每专辑目录体积 +
+     lastAccess 升序驱逐,直到回到预算内;从未被访问的专辑排最前。
+     注意 cache 树与 split 的 out 树是同一棵:驱逐语义 = "可再生的
+     缓存资产",被驱逐 专辑下次访问自愈(fake_md5 后 10 轨 ≈ 100 s)。
+  4. 访问表超限瘦身。
+
+**不做的事**:不基于 atime 操作(relatime 语义把它锁死在天级);不在
+文件名里编校验信息;不把源 MD5 作为第一层失效信号(当期的 O(mtime)
+探测没抓到的罕见情形交给 `verify` 人工深查)。
 
 ### 4.4 Plan 与尺寸一致性（trackfs 最大硬伤的修正）
 

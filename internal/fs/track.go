@@ -53,7 +53,16 @@ func (o *Root) Materialize(spec trackSpec) (string, error) {
 		// Forget this attempt so a later lookup can try again: a transient
 		// disk-full error must not poison the track for the mount's lifetime.
 		o.forgetOnce(spec.cachePath)
-		return "", fmt.Errorf("track not materialised at %s", spec.cachePath)
+		// The gc's album-dir prune can empty a track whose once was already
+		// consumed by an earlier synthesis - that lookup would skip the work
+		// and read as one transient EIO to the player. Retry the synthesis
+		// once directly (rename keeps concurrent writers honest) so a
+		// pruned track self-heals within the same call.
+		o.doMaterialize(spec)
+		info, err = os.Stat(spec.cachePath)
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return "", fmt.Errorf("track not materialised at %s", spec.cachePath)
+		}
 	}
 	return spec.cachePath, nil
 }
@@ -93,6 +102,9 @@ func (o *Root) doMaterialize(spec trackSpec) {
 	if err := os.Chmod(spec.cachePath, 0o644); err != nil {
 		o.opts.Log("overlay : chmod %s: %v", spec.cachePath, err)
 	}
+	// A synthesis is a touch: the fresh file must not look cold to the
+	// eviction passes.
+	o.access(spec.cachePath)
 	o.opts.Log("write   : %s", spec.cachePath)
 }
 
@@ -163,7 +175,16 @@ func (n *trackNode) Open(_ context.Context, flags uint32) (fs.FileHandle, uint32
 	if err != nil {
 		return nil, 0, fs.ToErrno(err)
 	}
+	// A read open is the access signal the gc bookkeeping tracks (方案二:
+	// per-track lastAccess table); attr traffic is deliberately ignored.
+	n.root.access(n.spec.cachePath)
 	return fs.NewLoopbackFileFromOS(f), fuse.FOPEN_KEEP_CACHE, 0
+}
+
+// access forwards one read to the gc bookkeeping (trackNode.Open calls it;
+// synthesis calls it too).
+func (o *Root) access(cachePath string) {
+	o.gc.recordAccess(cachePath, time.Now())
 }
 
 func statPath(path string) (*syscall.Stat_t, error) {

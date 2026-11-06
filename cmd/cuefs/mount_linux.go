@@ -13,6 +13,7 @@ import (
 	"cuefs/internal/config"
 	"cuefs/internal/cue"
 	"cuefs/internal/fs"
+	"time"
 )
 
 // newWorkFlags collects the flags that `split`, `retag`, `verify` and
@@ -89,6 +90,8 @@ func cmdMount(args []string, m *mountFlags) error {
 		CompressionLevel:  c.cfg.Split.CompressionLevel,
 		Workers:           c.cfg.Workers,
 		FakeStreamInfoMD5: c.cfg.Split.FakeStreamInfoMD5,
+		CacheMaxGB:        c.cfg.CacheMaxGB,
+		CacheTTL:          time.Duration(c.cfg.CacheTTL.Duration),
 		Log:               log,
 	}
 	if m.synthesize {
