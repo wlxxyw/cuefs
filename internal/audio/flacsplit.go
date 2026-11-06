@@ -23,6 +23,13 @@ type SplitSpec struct {
 	// one, a 300 MB album is walked once per track - the same bytes out of
 	// the page cache, N times.
 	Indexer IndexResolver
+
+	// FakeStreamInfoMD5 writes zeros into STREAMINFO.md5 (FLAC spec:
+	// "unknown, do not check") and skips the whole-window decode that the
+	// real MD5 requires - the split then only decodes the (at most two)
+	// boundary frames for their VERBATIM re-encode. Keep it consistent
+	// across split and mount: same track, same bytes.
+	FakeStreamInfoMD5 bool
 }
 
 // strategy is the header-number coding a frame of the new stream uses. The
@@ -107,16 +114,25 @@ func WriteFLACTrack(spec SplitSpec, out string) error {
 		si.BitsPerSample = spec.Bits
 	}
 
-	samples, err := DecodeIndexRange(spec.Src, idx.Frames[i0:i1+1])
-	if err != nil {
-		return err
-	}
-	// The produced audio's checksum: each covering frame contributes only
-	// its in-track span, which is exactly what the boundary VERBATIM frames
-	// hold after re-encoding.
-	sum, err := ChecksumRange(samples, spec, idx.Frames[i0:i1+1])
-	if err != nil {
-		return err
+	// The real STREAMINFO md5 is computed while decoding every covering
+	// frame of the window - that decode IS the split's CPU bill. With
+	// FakeStreamInfoMD5 the header carries zeros ("unknown" per the FLAC
+	// spec) and only the (at most two) boundary frames get decoded, for
+	// their VERBATIM re-encode.
+	var samples [][][]int32
+	var sum [16]byte
+	if !spec.FakeStreamInfoMD5 {
+		samples, err = DecodeIndexRange(spec.Src, idx.Frames[i0:i1+1])
+		if err != nil {
+			return err
+		}
+		// each covering frame contributes only its in-track span, which is
+		// exactly what the boundary VERBATIM frames hold after re-encoding.
+		raw, cerr := ChecksumRange(samples, spec, idx.Frames[i0:i1+1])
+		if cerr != nil {
+			return cerr
+		}
+		copy(sum[:], raw)
 	}
 
 	// Lay out the new stream: byte copies for fully contained frames,
@@ -125,6 +141,16 @@ func WriteFLACTrack(spec SplitSpec, out string) error {
 	if i1 >= i0 && idx.Frames[i0].Coding == "fixed" {
 		// The source stream is frame-numbered: positions must be rewritten.
 		strat = stratPos
+	}
+	// boundarySamples resolves one boundary frame's decoded PCM: from the
+	// pre-decoded window in real-md5 mode, or one targeted decode in
+	// fake-md5 mode (frames are independently decodable, so a byte-anchored
+	// parse is exact - and it dodges mewkiz's seek-limitation).
+	boundarySamples := func(i int) ([][]int32, error) {
+		if samples != nil {
+			return samples[i-i0], nil
+		}
+		return DecodeFrame(spec.Src, idx.Frames[i])
 	}
 	var emitted []FlacFrame
 	var boundary []boundaryWork
@@ -155,10 +181,14 @@ func WriteFLACTrack(spec SplitSpec, out string) error {
 			})
 			continue
 		}
-		chanSamples := make([][]int32, len(samples[i-i0]))
+		dec, derr := boundarySamples(i)
+		if derr != nil {
+			return derr
+		}
+		chanSamples := make([][]int32, len(dec))
 		offset := int(inStart - st)
 		for ch := range chanSamples {
-			chanSamples[ch] = samples[i-i0][ch][offset : offset+n]
+			chanSamples[ch] = dec[ch][offset : offset+n]
 		}
 		emitted = append(emitted, FlacFrame{
 			Samples:   n,
@@ -242,7 +272,7 @@ func WriteFLACTrack(spec SplitSpec, out string) error {
 	if st.MinBlocksize > st.MaxBlocksize {
 		st.MinBlocksize = st.MaxBlocksize
 	}
-	copy(st.MD5[:], sum)
+	st.MD5 = sum
 
 	blocks := []MetaBlock{
 		{Kind: BlockStreamInfo, Data: encodeStreamInfo(st)},

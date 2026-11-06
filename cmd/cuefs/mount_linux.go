@@ -76,19 +76,20 @@ func cmdMount(args []string, m *mountFlags) error {
 	}
 
 	o := fs.Options{
-		Src:              m.src,
-		Cache:            config.ExpandHome(m.cache),
-		Detect:           cue.DetectOptions{Force: c.encoding, List: c.cfg.Cue.EncodingList},
-		SplitExtensions:  c.cfg.Split.Extensions,
-		ApeMode:          c.cfg.Split.ApeMode,
-		ApeExt:           c.cfg.ApeExt(),
-		NameTemplate:     c.cfg.NameTemplate,
-		MaxTitleLen:      c.cfg.TitleMaxLen,
-		IgnoreTags:       c.cfg.Cue.IgnoreTags,
-		FfprobeBin:       c.cfg.FfprobeBin,
-		CompressionLevel: c.cfg.Split.CompressionLevel,
-		Workers:          c.cfg.Workers,
-		Log:              log,
+		Src:               m.src,
+		Cache:             config.ExpandHome(m.cache),
+		Detect:            cue.DetectOptions{Force: c.encoding, List: c.cfg.Cue.EncodingList},
+		SplitExtensions:   c.cfg.Split.Extensions,
+		ApeMode:           c.cfg.Split.ApeMode,
+		ApeExt:            c.cfg.ApeExt(),
+		NameTemplate:      c.cfg.NameTemplate,
+		MaxTitleLen:       c.cfg.TitleMaxLen,
+		IgnoreTags:        c.cfg.Cue.IgnoreTags,
+		FfprobeBin:        c.cfg.FfprobeBin,
+		CompressionLevel:  c.cfg.Split.CompressionLevel,
+		Workers:           c.cfg.Workers,
+		FakeStreamInfoMD5: c.cfg.Split.FakeStreamInfoMD5,
+		Log:               log,
 	}
 	if m.synthesize {
 		// APE (and any FLAC that the pure-Go engine cannot handle) is

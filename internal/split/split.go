@@ -52,6 +52,11 @@ type Options struct {
 	// until a run makes one; index and fresh-mtime checks live here).
 	Indexer *audio.IndexCache
 
+	// FakeStreamInfoMD5 writes zeros into the produced STREAMINFO and
+	// skips the whole-window decode the real md5 requires (DESIGN §4.3.5);
+	// split and mount read the same config value here.
+	FakeStreamInfoMD5 bool
+
 	// Behaviour
 	Workers int
 	Force   bool   // rebuild even when the output file already exists
@@ -387,9 +392,10 @@ func writeTrack(o Options, album *plan.Album, t *plan.Track, st *Stats) {
 	if err := engine.WriteTrack(album.SourcePath, engine.Facts{
 		SampleRate: album.SampleRate, Channels: album.Channels, Bits: album.Bits,
 	}, t, out, engine.Options{
-		FfmpegBin:        o.FfmpegBin,
-		CompressionLevel: o.CompressionLevel,
-		Indexer:          o.Indexer,
+		FfmpegBin:         o.FfmpegBin,
+		CompressionLevel:  o.CompressionLevel,
+		Indexer:           o.Indexer,
+		FakeStreamInfoMD5: o.FakeStreamInfoMD5,
 	}); err != nil {
 		st.TracksFailed++
 		st.Errors++

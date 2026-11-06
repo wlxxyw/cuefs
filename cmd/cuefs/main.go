@@ -20,7 +20,7 @@ import (
 	"cuefs/internal/split"
 )
 
-const version = "0.2.0-m4.7"
+const version = "0.2.0-m4.8"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -654,26 +654,27 @@ func (c *commonFlags) options(w *workFlags) (split.Options, error) {
 		log = func(string, ...any) {}
 	}
 	return split.Options{
-		SrcRoot:          w.src,
-		OutRoot:          w.out,
-		SplitExtensions:  c.cfg.Split.Extensions,
-		EncodingList:     c.cfg.Cue.EncodingList,
-		ForceEncoding:    c.encoding,
-		ApeExt:           c.cfg.ApeExt(),
-		ApeMode:          c.cfg.Split.ApeMode,
-		NameTemplate:     c.cfg.NameTemplate,
-		MaxTitleLen:      c.cfg.TitleMaxLen,
-		IgnoreTags:       c.cfg.Cue.IgnoreTags,
-		FfmpegBin:        c.cfg.FfmpegBin,
-		FfprobeBin:       c.cfg.FfprobeBin,
-		CompressionLevel: c.cfg.Split.CompressionLevel,
-		Workers:          c.cfg.Workers,
-		Reference:        w.refMode,
-		Force:            w.force,
-		Link:             w.link,
-		Only:             w.only,
-		Dry:              w.dry,
-		Log:              log,
+		SrcRoot:           w.src,
+		OutRoot:           w.out,
+		SplitExtensions:   c.cfg.Split.Extensions,
+		EncodingList:      c.cfg.Cue.EncodingList,
+		ForceEncoding:     c.encoding,
+		ApeExt:            c.cfg.ApeExt(),
+		ApeMode:           c.cfg.Split.ApeMode,
+		NameTemplate:      c.cfg.NameTemplate,
+		MaxTitleLen:       c.cfg.TitleMaxLen,
+		IgnoreTags:        c.cfg.Cue.IgnoreTags,
+		FfmpegBin:         c.cfg.FfmpegBin,
+		FfprobeBin:        c.cfg.FfprobeBin,
+		CompressionLevel:  c.cfg.Split.CompressionLevel,
+		FakeStreamInfoMD5: c.cfg.Split.FakeStreamInfoMD5,
+		Workers:           c.cfg.Workers,
+		Reference:         w.refMode,
+		Force:             w.force,
+		Link:              w.link,
+		Only:              w.only,
+		Dry:               w.dry,
+		Log:               log,
 	}, nil
 }
 

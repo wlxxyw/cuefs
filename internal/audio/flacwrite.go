@@ -1,10 +1,12 @@
 package audio
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
 	"github.com/mewkiz/flac"
+	"github.com/mewkiz/flac/frame"
 )
 
 // DecodeIndexRange decodes the samples of the given (already indexed) frames,
@@ -59,6 +61,39 @@ func DecodeIndexRange(path string, frames []FlacFrame) ([][][]int32, error) {
 		// the others (measured: 30849*3696 vs the real 126357504). The frame
 		// index is the authority for positions.
 		out = append(out, chans)
+	}
+	return out, nil
+}
+
+// DecodeFrame decodes exactly one indexed frame, reading its bytes straight
+// from the source at the index's Offset/Length. It exists for paths that
+// cannot afford a stream-induced seek (mewkiz's Seek cannot jump into the
+// middle of a stream without a seek table) - FLAC frames are independently
+// decodable, so a byte-anchored parse is exact.
+func DecodeFrame(src string, want FlacFrame) ([][]int32, error) {
+	buf := make([]byte, want.Length)
+	f, err := os.Open(src)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if _, err := f.ReadAt(buf, want.Offset); err != nil {
+		return nil, fmt.Errorf("%s: read frame at %d: %w", src, want.Offset, err)
+	}
+	fr, err := frame.New(bytes.NewReader(buf))
+	if err != nil {
+		return nil, fmt.Errorf("%s: frame header at %d: %w", src, want.Offset, err)
+	}
+	if err := fr.Parse(); err != nil {
+		return nil, fmt.Errorf("%s: frame at %d (%s): %w", src, want.Offset, want.Coding, err)
+	}
+	out := make([][]int32, len(fr.Subframes))
+	for ch := range out {
+		out[ch] = fr.Subframes[ch].Samples
+	}
+	if n := len(out[0]); n != want.Samples {
+		return nil, fmt.Errorf("%s: frame at %d decodes %d samples, index says %d",
+			src, want.Offset, n, want.Samples)
 	}
 	return out, nil
 }

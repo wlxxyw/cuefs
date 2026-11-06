@@ -32,6 +32,13 @@ split:
                                 #   hide: drop the ape source AND its cue sheet
                                 #   passthrough: expose the untouched cue + ape pair
   compression_level: 5          # FLAC compression level for ffmpeg (0-8)
+  # Write zeros into the split tracks' STREAMINFO md5 ("unknown" per the
+  # FLAC spec) instead of the real PCM md5. Skips the whole-track PCM
+  # decode - the split then costs near-I/O time at the price of players
+  # not being able to self-verify the files (Navidrome/taglib ignore the
+  # field either way; verify re-computes both sides regardless). Split and
+  # mount read this together: same key, same bytes from either entry.
+  fake_streaminfo_md5: false
 
 # --- cue sheets (DESIGN §4.1, §4.2) --------------------------------------
 cue:

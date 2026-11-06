@@ -344,6 +344,25 @@ I/O 压力。M4.7 引入 `audio.IndexCache`（`flacindexcache.go`）：
 (轨数-专辑数) 次走链;墙钟大头仍是 mewkiz 全轨解码（STREAMINFO 真实
 MD5 所需,分轨内不可省）。
 
+#### 4.3.5 M4.8：`split.fake_streaminfo_md5`——md5 让位,解码只保留边界
+
+真实 STREAMINFO MD5 的价格是**每条轨做完整体解码**（算 md5 就是"解码出的
+PCM 拼一起"),FLAC 分轨的 CPU 账单来自这里（实测在别处 306 MB 专辑
+`split --force` 12 分钟内 85% 为 mewkiz 解码 + 全轨 PCM 内存驻留 GC）。
+
+`split.fake_streaminfo_md5: false | true`（默认 false=现状）：
+- **true**：STREAMINFO.md5 十六个字节写 0——FLAC 规范语义为"未知,不校验"，
+  libFLAC `flac -t` 跳过比对。分轨因此只解码**至多两帧边界帧**
+  （`audio.DecodeFrame`：按索引的 Offset/Length 定点读帧字节、
+  `frame.Parse` 帧级解析——FLAC 帧独立可解,绕开 mewkiz Stream.Seek
+  无法无 seektable 中途跳转的限制）,装配回到接近 I/O 的时间。
+- **读者影响**：Navidrome/taglib 只读 STREAMINFO 的时长字段,`verify`
+  两侧都自行现算 md5,均与存储值无关;`flac -t` 对 0 语义容忍。
+  丢的是文件的自描述完整性锚点。
+- **一致性约束**：`split` 与 mount 的 FUSE 合成吃**同一个配置值**
+  （键改在 engine 分派层）——同一轨无论谁先写,字节一致;配置切换不回写
+  旧文件（skip 语义看存在性,与 tag 模板变更相同）。
+
 ### 4.4 Plan 与尺寸一致性（trackfs 最大硬伤的修正）
 
 原则：**一个虚拟文件的 size 在其 manifest 生命周期内绝不变化。**

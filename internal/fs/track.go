@@ -79,8 +79,9 @@ func (o *Root) doMaterialize(spec trackSpec) {
 		SampleRate: spec.album.SampleRate, Channels: spec.album.Channels,
 		Bits: spec.album.Bits,
 	}, spec.track, spec.cachePath, engine.Options{
-		FfmpegBin:        o.opts.FfmpegBin,
-		CompressionLevel: o.opts.CompressionLevel,
+		FfmpegBin:         o.opts.FfmpegBin,
+		CompressionLevel:  o.opts.CompressionLevel,
+		FakeStreamInfoMD5: o.opts.FakeStreamInfoMD5,
 	}); err != nil {
 		o.opts.Log("overlay : FAIL %s: %v", spec.cachePath, err)
 		return

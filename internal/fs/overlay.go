@@ -50,10 +50,11 @@ type Options struct {
 
 	// Synthesis knobs. FfmpegBin may be empty, in which case FLAC and APE
 	// tracks can only be served from the cache.
-	FfmpegBin        string
-	FfprobeBin       string
-	CompressionLevel int
-	Workers          int
+	FfmpegBin         string
+	FfprobeBin        string
+	CompressionLevel  int
+	Workers           int
+	FakeStreamInfoMD5 bool // split.streaminfo_md5 shares the split's config value
 
 	Log func(format string, args ...any)
 }

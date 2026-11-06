@@ -32,6 +32,13 @@ type Split struct {
 	// CompressionLevel is the FLAC compression level handed to ffmpeg
 	// (0-8); higher levels produce smaller files and cost more CPU.
 	CompressionLevel int `yaml:"compression_level"`
+	// FakeStreamInfoMD5 writes zeros into the produced STREAMINFO's md5
+	// (the FLAC spec treats 0 as "unknown, do not check") and skips the
+	// whole-window PCM decode that the real md5 requires - the split then
+	// decodes only the two boundary frames. Navidrome/taglib/ffmpeg do
+	// not read the stored md5; verify re-computes both sides regardless.
+	// Default false keeps the self-described output (real md5).
+	FakeStreamInfoMD5 bool `yaml:"fake_streaminfo_md5"`
 }
 
 // Cue holds cue-sheet parsing configuration (DESIGN §4.1, §4.2).
@@ -171,10 +178,11 @@ func applyYAML(cfg *Config, b []byte) error {
 		KeepAlbum    *bool     `yaml:"keep_album"`
 		LogLevel     *string   `yaml:"log_level"`
 		Split        *struct {
-			Extensions       *[]string `yaml:"extensions"`
-			ApeConvertFormat *string   `yaml:"ape_convert_format"`
-			ApeMode          *string   `yaml:"ape_mode"`
-			CompressionLevel *int      `yaml:"compression_level"`
+			Extensions        *[]string `yaml:"extensions"`
+			ApeConvertFormat  *string   `yaml:"ape_convert_format"`
+			ApeMode           *string   `yaml:"ape_mode"`
+			CompressionLevel  *int      `yaml:"compression_level"`
+			FakeStreamInfoMD5 *bool     `yaml:"fake_streaminfo_md5"`
 		} `yaml:"split"`
 		Cue *struct {
 			Encoding     *string                `yaml:"encoding"`
@@ -222,6 +230,9 @@ func applyYAML(cfg *Config, b []byte) error {
 		set(&cfg.Split.ApeConvertFormat, raw.Split.ApeConvertFormat)
 		set(&cfg.Split.ApeMode, raw.Split.ApeMode)
 		setInt(&cfg.Split.CompressionLevel, raw.Split.CompressionLevel)
+		if raw.Split.FakeStreamInfoMD5 != nil {
+			cfg.Split.FakeStreamInfoMD5 = *raw.Split.FakeStreamInfoMD5
+		}
 	}
 	if raw.Cue != nil {
 		set(&cfg.Cue.Encoding, raw.Cue.Encoding)

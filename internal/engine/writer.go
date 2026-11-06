@@ -21,6 +21,11 @@ type Options struct {
 	// tracks; nil makes every split index its source itself (the
 	// single-shot contract of audio.IndexFlacFrames).
 	Indexer audio.IndexResolver
+
+	// FakeStreamInfoMD5 writes zeros into the produced STREAMINFO instead
+	// of the real PCM md5, skipping the whole-window decode. Keep the same
+	// value in split and mount: same track, same bytes.
+	FakeStreamInfoMD5 bool
 }
 
 func (o *Options) defaults() {
@@ -124,14 +129,15 @@ func writeWav(src string, t *plan.Track, out string) error {
 // fallback, which keeps odd files splittable.
 func writeFlac(src string, facts Facts, t *plan.Track, out string, o Options) error {
 	err := audio.WriteFLACTrack(audio.SplitSpec{
-		Src:        src,
-		Start:      t.Start,
-		End:        t.End,
-		SampleRate: facts.SampleRate,
-		Channels:   facts.Channels,
-		Bits:       facts.Bits,
-		Tags:       Entries(t.Tags),
-		Indexer:    o.Indexer,
+		Src:               src,
+		Start:             t.Start,
+		End:               t.End,
+		SampleRate:        facts.SampleRate,
+		Channels:          facts.Channels,
+		Bits:              facts.Bits,
+		Tags:              Entries(t.Tags),
+		Indexer:           o.Indexer,
+		FakeStreamInfoMD5: o.FakeStreamInfoMD5,
 	}, out)
 	if err == nil {
 		return nil
