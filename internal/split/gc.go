@@ -78,6 +78,9 @@ func expectedFiles(o Options, p *Plan) map[string]bool {
 // rules over the source tree, which is what a split run writes beside the
 // tracks. Replaying the rules keeps the prune's expected set byte-compatible
 // with those writes.
+//
+// It deliberately ignores Options.SkipPassthrough: a track-only run must not
+// turn previously written passthrough files into prunable orphans.
 func mirrorWalk(o Options, p *Plan, expected map[string]bool) error {
 	fsys := os.DirFS(o.SrcRoot)
 	return fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {

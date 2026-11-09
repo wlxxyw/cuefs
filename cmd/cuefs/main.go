@@ -21,7 +21,7 @@ import (
 	"cuefs/internal/split"
 )
 
-const version = "0.2.0-m4.9"
+const version = "0.2.0-m4.10"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -605,15 +605,16 @@ func logf(format string, args ...any) {
 }
 
 type workFlags struct {
-	src     string
-	out     string
-	only    string
-	force   bool
-	link    bool
-	dry     bool
-	quiet   bool
-	workers int
-	refMode string
+	src             string
+	out             string
+	only            string
+	force           bool
+	link            bool
+	skipPassthrough bool
+	dry             bool
+	quiet           bool
+	workers         int
+	refMode         string
 }
 
 func newWorkFlags(name string, verify bool) (*commonFlags, *workFlags) {
@@ -631,6 +632,8 @@ func newWorkFlags(name string, verify bool) (*commonFlags, *workFlags) {
 	if !verify {
 		c.fs.BoolVar(&w.link, "link", false,
 			"hardlink passthrough files instead of copying them (same filesystem only)")
+		c.fs.BoolVar(&w.skipPassthrough, "skip-passthrough", false,
+			"skip files that do not need splitting (covers/logs/m3u/...) and list them as skipped; split tracks only")
 		c.fs.BoolVar(&w.dry, "dry", false, "plan and report without writing anything")
 	}
 	return c, w
@@ -676,6 +679,7 @@ func (c *commonFlags) options(w *workFlags) (split.Options, error) {
 		Reference:         w.refMode,
 		Force:             w.force,
 		Link:              w.link,
+		SkipPassthrough:   w.skipPassthrough,
 		Only:              w.only,
 		Dry:               w.dry,
 		CacheMaxGB:        c.cfg.CacheMaxGB,
@@ -685,7 +689,8 @@ func (c *commonFlags) options(w *workFlags) (split.Options, error) {
 }
 
 // cmdSplit materialises a library: one generated FLAC per track, plus every
-// other file hardlinked or copied into the output tree.
+// other file hardlinked or copied into the output tree (skipped entirely
+// with --skip-passthrough).
 func cmdSplit(args []string) error {
 	c, w := newWorkFlags("split", false)
 	if err := c.fs.Parse(args); err != nil {

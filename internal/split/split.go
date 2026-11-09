@@ -67,7 +67,14 @@ type Options struct {
 	Link    bool   // hardlink passthrough files instead of copying
 	Only    string // act only on albums whose name contains this
 	Dry     bool   // plan and report without writing
-	Log     func(format string, args ...any)
+	// SkipPassthrough makes the run a track-only split: files that do not
+	// need splitting (covers beside tracks, logs, m3u, ...) are counted and
+	// reported as skipped instead of being written. Covers extracted from
+	// split candidates still go through. The trailing prune keeps replaying
+	// the full mirror rules, so it never deletes passthrough files that are
+	// already in the tree (see gc.go).
+	SkipPassthrough bool
+	Log             func(format string, args ...any)
 }
 
 // defaultsRef normalises the verify reference mode (auto | ffmpeg | pure).
@@ -134,10 +141,13 @@ type Stats struct {
 	TracksFailed  int
 	Covers        int
 	Others        int
+	OthersSkipped int
 	TrackBytes    uint64
 	OtherBytes    uint64
-	Warnings      int
-	Errors        int
+	// Skip-passthrough runs count here instead of Others/OtherBytes.
+	OtherSkippedBytes uint64
+	Warnings          int
+	Errors            int
 	// The cache tree as it stood after the run's gc pass (report only).
 	CacheFiles int
 	CacheBytes uint64
@@ -145,9 +155,13 @@ type Stats struct {
 
 // Report prints a human summary.
 func (s *Stats) Report(w io.Writer) {
-	fmt.Fprintf(w, "%d album(s), %d track(s): written %d, skipped %d, failed %d, cover(s) %d; passthrough %d file(s)\n",
+	passthrough := fmt.Sprintf("passthrough %d file(s)", s.Others)
+	if s.OthersSkipped > 0 {
+		passthrough += fmt.Sprintf(" (%d skipped)", s.OthersSkipped)
+	}
+	fmt.Fprintf(w, "%d album(s), %d track(s): written %d, skipped %d, failed %d, cover(s) %d; %s\n",
 		s.Albums, s.Tracks, s.TracksWritten, s.TracksSkipped, s.TracksFailed,
-		s.Covers, s.Others)
+		s.Covers, passthrough)
 	fmt.Fprintf(w, "generated %s, passthrough %s, %d warning(s), %d error(s)\n",
 		humanBytes(s.TrackBytes), humanBytes(s.OtherBytes), s.Warnings, s.Errors)
 }
@@ -583,6 +597,15 @@ func mirror(o Options, p *Plan, st *Stats) error {
 				return nil
 			}
 		} else if p.Sampled[path] {
+			return nil
+		}
+		// skip-passthrough runs count what they would have copied and drop
+		// it: the split output stays a track-only tree for quick tests.
+		if o.SkipPassthrough {
+			if info, ierr := d.Info(); ierr == nil && info.Mode().IsRegular() {
+				st.OthersSkipped++
+				st.OtherSkippedBytes += uint64(info.Size())
+			}
 			return nil
 		}
 		return passthrough(o, path, rel, st)

@@ -1,6 +1,7 @@
 package split
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,4 +99,57 @@ func modeName(m string) string {
 		return "convert-default"
 	}
 	return m
+}
+
+// TestSplitSkipPassthrough: with SkipPassthrough, everything that would be
+// mirrored (the APE pair in passthrough mode plus unrelated files) stays out
+// of the output tree and only shows up in the skipped counters. Running the
+// same plan with the flag off copies them as before.
+func TestSplitSkipPassthrough(t *testing.T) {
+	src := writeApePair(t)
+	extra := filepath.Join(src, "notes.txt")
+	if err := os.WriteFile(extra, []byte("readme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		skip          bool
+		wantApe, want bool
+		wantSkipped   int
+	}{
+		{false, true, true, 0},
+		{true, false, false, 3},
+	} {
+		t.Run(fmt.Sprintf("skip=%v", tc.skip), func(t *testing.T) {
+			out := t.TempDir()
+			o := Options{
+				SrcRoot: src, OutRoot: out, ApeMode: "passthrough",
+				SkipPassthrough: tc.skip,
+				Log:             func(string, ...any) {},
+			}
+			st, err := Materialize(o)
+			if err != nil {
+				t.Fatalf("Materialize: %v", err)
+			}
+			has := func(name string) bool {
+				_, err := os.Stat(filepath.Join(out, name))
+				return err == nil
+			}
+			if has("album.ape") != tc.wantApe {
+				t.Errorf("album.ape present = %v, want %v", has("album.ape"), tc.wantApe)
+			}
+			if has("album.ape.cue") != tc.want {
+				t.Errorf("album.ape.cue present = %v, want %v", has("album.ape.cue"), tc.want)
+			}
+			if has("notes.txt") != tc.want {
+				t.Errorf("notes.txt present = %v, want %v", has("notes.txt"), tc.want)
+			}
+			if st.OthersSkipped != tc.wantSkipped {
+				t.Errorf("skipped passthrough = %d, want %d", st.OthersSkipped, tc.wantSkipped)
+			}
+			if tc.skip && st.Others != 0 {
+				t.Errorf("copied passthrough = %d, want 0 in skip mode", st.Others)
+			}
+		})
+	}
 }
