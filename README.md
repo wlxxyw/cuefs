@@ -1,5 +1,7 @@
 # cuefs
 
+**English** | [简体中文](README.zh.md) | [完整命令行文档 / CLI reference (中文)](docs/CLI.zh.md)
+
 A read-only virtual filesystem for Linux that presents **single-file album
 releases** (one big audio file + a `.cue` sheet) as **individual track files**,
 so that Navidrome — or any other player that only understands real files — can
@@ -19,10 +21,12 @@ HOST                                   Navidrome container
 
 Everything that is not a cue-backed album file is passed through untouched.
 
-> **Status: M1 + M4 + M2 (splitting, verification, Go metadata engine, FUSE).**
-> `cuefs mount` now presents the library as a read-only FUSE filesystem whose
-> per-track files are backed by the split cache. The full design and decision
-> log live in [`docs/DESIGN.md`](docs/DESIGN.md).
+> **Status: M0–M4 complete (0.2.0-m4.10).**
+> `cuefs mount` presents the library as a read-only FUSE filesystem whose
+> per-track files are backed by the split cache, and manages that cache while
+> it runs. The full design and decision log live in
+> [`docs/DESIGN.md`](docs/DESIGN.md); every command and flag is documented in
+> [`docs/CLI.zh.md`](docs/CLI.zh.md) (Chinese).
 
 ## Why not just use trackfs?
 
@@ -61,6 +65,13 @@ generated 10.0 GiB, passthrough 169.7 GiB, 0 warning(s), 0 error(s)
   zero extra disk when source and output share a filesystem. Caveat: an
   output hardlink **is** the source file, so never write to the output tree.
   Without the flag everything is copied (mode and mtime preserved).
+* **`--skip-passthrough`** skips every file that does not need splitting
+  (covers aside: logs, m3u, already-split trees, ...) and reports how many
+  were skipped (the summary says `passthrough 0 file(s) (N skipped)`), so
+  the output tree holds tracks and covers only. Built for quick local tests
+  on a small slice of a large library; when combined with `--link`, skipping
+  wins. The trailing cache prune still keeps replaying the full mirror rules,
+  so it never deletes passthrough files that a previous full run wrote.
 * **Tags are written by cuefs itself**, not by ffmpeg, so multi-value keys
   (`ARTIST`, `GENRE`, ...) become real multi-value Vorbis Comments and the
   `encoder: Lavf...` noise is gone.
@@ -87,8 +98,9 @@ cache entry that is not there yet is materialised on demand into that tree, so
 the mount point fills itself in as it is used (`--synthesize`).
 
 The mount spawns **no external binary by default**: WAV tracks are cut in pure
-Go (no decoder at all), and only FLAC/APE audio movement needs ffmpeg - and
-then only with `--synthesize` (and `ffmpeg_bin` set in the configuration).
+Go (no decoder at all), FLAC tracks use the pure-Go engine, and only APE audio
+needs ffmpeg — and then only with `--synthesize` (and `ffmpeg_bin` set in the
+configuration).
 
 ```console
 $ cuefs mount --config cuefs.yaml        # src/mount/cache from the config
@@ -255,10 +267,10 @@ $ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
 | Milestone | Contents |
 |---|---|
 | **M0** ✅ | cue parser, encoding detection, `probe` / `scan` / `dump` |
-| **M1** ✅ | `cuefs split` via ffmpeg + sample-exact verification (`verify`) |
+| **M1** ✅ | `cuefs split`, sample-exact verification (`verify`) |
 | **M4** ✅ | pure-Go FLAC metadata engine + no-decode frame indexer (`flacinfo`, `retag`), pure-Go WAV splitting |
 | **M2** ✅ | read-only FUSE overlay (`mount`) backed by the split cache, self-hydrating on demand |
-| M2 | read-only FUSE overlay (passthrough + tracks), consumable by Navidrome |
+| **M4.5–M4.9** ✅ | all-Go FLAC path, tag merging (source tags as base), WAV tag containers, one frame index per album per run, `fake_streaminfo_md5`, `gc` + the mount-time cache task |
 | M3 | `hydrate` pre-warming, persistent LRU cache, systemd unit, Navidrome bring-up |
 
 Acceptance criteria for each milestone are listed in
