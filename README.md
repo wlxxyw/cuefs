@@ -110,9 +110,18 @@ $ cd /mnt/music-split && ls "许巍.../在别处..."
 在别处.jpg           许巍 - 在别处.log     <== passthrough
 ```
 
-Mount options: `--allow-other` (needs `user_allow_other` in `/etc/fuse.conf`),
-`--workers N` (cap on concurrent synthesis), `--fuse-opts "…"`. The overlay is
-read-only: `mkdir/unlink/rmdir/create/symlink/rename` are rejected.
+Mount options: `--allow-other` (needs `user_allow_other` in `/etc/fuse.conf`; no
+restart needed — it applies to the next mount), `--workers N` (cap on concurrent
+synthesis), `--fuse-opts "…"`. The overlay is read-only:
+`mkdir/unlink/rmdir/create/symlink/rename` are rejected.
+
+The mount carries `default_permissions` built in: the kernel enforces the
+classic Unix permission checks against the uid/gid/mode cuefs reports — and the
+overlay mirrors the source files' bits verbatim (that's what `ls -l` on the
+mount shows). When Navidrome runs as a different system user, `--allow-other`
+alone only clears the fusermount3 layer; the source tree must be
+readable/traversable for that user too: `chmod -R a+rX /srv/music` (either one
+missing → EACCES).
 
 Then point Navidrome at the mount point:
 

@@ -78,7 +78,9 @@ $ cd /mnt/music-split && ls "许巍.../在别处..."
 在别处.jpg           许巍 - 在别处.log     <== 原样保留
 ```
 
-挂载参数：`--allow-other`（需要 `/etc/fuse.conf` 里有 `user_allow_other`）、`--workers N`（同时生成几首的上限）、`--fuse-opts "…"`。挂载出来的视图是只读的：`mkdir`、`unlink`、`rmdir`、`create`、`symlink`、`rename` 都会被拒绝。
+挂载参数：`--allow-other`（需要 `/etc/fuse.conf` 里有 `user_allow_other`，改完不需重启，对下一次挂载生效）、`--workers N`（同时生成几首的上限）、`--fuse-opts "…"`。挂载出来的视图是只读的：`mkdir`、`unlink`、`rmdir`、`create`、`symlink`、`rename` 都会被拒绝。
+
+挂载点默认带 `default_permissions`，权限检查由内核按**源目录文件的 uid/gid/mode**（cuefs 原样透传，见挂载点里 `ls -l`）执行。所以另一个系统用户运行 Navidrome 时，只加 `--allow-other` 往往不够——还需要把源库的权限位放行：`chmod -R a+rX /srv/music`（缺一报 EACCES）。
 
 然后把 Navidrome 指向这个挂载点：
 

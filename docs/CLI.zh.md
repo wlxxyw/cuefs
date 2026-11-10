@@ -322,7 +322,7 @@ cuefs mount [-src 目录] [-mount 挂载点] [-cache 目录] [-synthesize] [-all
 | `-cache` | string | `/srv/out` | 配置 `cache` | 生成的单曲放哪；和 `split` 的输出是同一个结构，指向同一个目录就共用 |
 | `-synthesize` | bool | | `false` | 缓存里没有时，允许调用外部 ffmpeg 当场生成；不开的话只有 FLAC/WAV 能靠内置引擎临时生成，APE 会报错 |
 | `-allow-other` | bool | | `false` | 给 fusermount3 传 `allow_other`（需要 `/etc/fuse.conf` 里有 `user_allow_other`）；Navidrome 用另一个系统用户访问时需要 |
-| `-fuse-opts` | string | `default_permissions` | `""` | 原样传给 fusermount3 的其他选项，多个用逗号隔开 |
+| `-fuse-opts` | string | | `""` | 原样传给 fusermount3 的其他选项，多个用逗号隔开；与内置选项重复时会自动去重，`fsname=xxx` 会覆盖默认值 |
 | `-workers` | int | `4` | 配置 `workers` | 同时生成几首的上限 |
 | `-quiet` | bool | | `false` | 不打印每个文件的处理行 |
 
@@ -337,6 +337,23 @@ cuefs mount -allow-other
 # 缓存没有时允许 ffmpeg 当场生成（APE 必须开，FLAC 也可以让 ffmpeg 来生成）
 cuefs mount -synthesize
 ```
+
+### 权限模型（另一系统用户访问需过两道闸）
+
+`-allow-other` 只放行 fusermount3 这一层（"允许非挂载执行人的用户访问该挂载点"）。真正的读写裁决由内核经 `default_permissions` 按**挂载视图回报的 uid/gid/mode** 做经典 Unix 检查，而 cuefs 是 loopback 视图，回报的就是**源目录文件自己的属主与权限位**。所以另一个系统用户（例如 Navidrome 所用的容器用户）能读挂载点，两件事缺一报 EACCES：
+
+```bash
+# 1. fusermount3 层放行（等于 -allow-other，未有 user_allow_other 时挂载会报错）
+grep user_allow_other /etc/fuse.conf     # /etc/fuse.conf 改完不需重启，下一次挂载即生效
+cuefs mount -allow-other
+
+# 2. 源库对那个用户读得动 —— cuefs 不做自己的权限判断，只透传源文件的权限位
+chmod -R a+rX /srv/music         # a+rX 只补读 + 目录进入位，不乱加可执行
+# 改完先验证最终效果：
+sudo -u navidrome ls /srv/music  # 生产里用 Navidrome 的部署方式自检一下
+```
+
+挂载点 `ls` 出来的 mode/owner 就是源文件的原样映射——权限出了问题先看源目录而不是挂载点；改的是源的权限，也无需重新挂载即可生效。
 
 ### 输出示例（定时任务的日志）
 ```

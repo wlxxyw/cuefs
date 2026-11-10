@@ -141,8 +141,49 @@ type pendingView struct {
 	err  error
 }
 
-// Mount attaches the overlay at mountpoint and starts serving. Unmount
-// detaches again.
+// mountOptions assembles the fusermount3 options of the read-only overlay:
+// the built-ins, then allow_other when asked for (the usual route for
+// another system user, e.g. Navidrome's, to read the mount), then the
+// user's -fuse-opts verbatim. A repeated flag (default_permissions,
+// allow_other, ro) is skipped so that -allow-other and an explicit
+// -fuse-opts default_permissions can coexist without fusermount3 seeing
+// it twice; a user-supplied key=value replaces the built-in with the same
+// key (fsname= being the realistic case).
+func mountOptions(allowOther bool, extra []string) []string {
+	opts := []string{"ro", "default_permissions", "fsname=cuefs"}
+	has := func(o string) bool {
+		for _, have := range opts {
+			if have == o {
+				return true
+			}
+		}
+		return false
+	}
+	if allowOther && !has("allow_other") {
+		opts = append(opts, "allow_other")
+	}
+	for _, o := range extra {
+		if has(o) {
+			continue
+		}
+		if key, _, isKV := strings.Cut(o, "="); isKV {
+			replaced := false
+			for i, have := range opts {
+				if k, _, isKV := strings.Cut(have, "="); isKV && k == key {
+					opts[i] = o
+					replaced = true
+					break
+				}
+			}
+			if replaced {
+				continue
+			}
+		}
+		opts = append(opts, o)
+	}
+	return opts
+}
+
 // Mount attaches the overlay at mountpoint and starts serving. Unmount
 // detaches again.
 //
@@ -182,8 +223,9 @@ func Mount(mountpoint string, o Options, fuseExtra []string, allowOther bool) (*
 		AttrTimeout:  &sec,
 		MountOptions: fuse.MountOptions{
 			// Read-only, with the permission checks done by the kernel from
-			// the mode bits the nodes report.
-			Options: []string{"ro", "default_permissions", "fsname=cuefs"},
+			// the mode bits the nodes report; -allow-other and -fuse-opts
+			// merge into the same list (see mountOptions).
+			Options: mountOptions(allowOther, fuseExtra),
 			Name:    "cuefs",
 		},
 	})

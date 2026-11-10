@@ -505,7 +505,13 @@ Navidrome 的真实目录树**。
 - 目录节点 = 源目录 readdir ∪ 分轨虚拟文件；文件节点分两类：
   - **透传**：`LoopbackFile`，stat/open/read 直接走源路径；
   - **track**：读走缓存文件（`LoopbackFile`）或合成流（M4）。
-- 挂载选项：只读、`allow_other`、`default_permissions`。
+- 挂载选项：内置 `ro`、`default_permissions`、`fsname=cuefs`；`-allow-other` 与
+  `-fuse-opts` 合并进同一列表（重复的 flag 去重，同名 key=value 覆盖内置项，见
+  `fs.mountOptions`）。
+- 权限模型：`default_permissions` = 内核按视图回报的属性做经典 Unix 检查，
+  cuefs 自己不做权限裁决；loopback 视图把源文件的 uid/gid/mode 原样透传。因此
+  另一系统用户访问需两道都过：fusermount3 层 `-allow_other`（fuse 需
+  `user_allow_other`）+ 源库权限位可读可进入（`chmod -R a+rX`），缺一 EACCES。
 - 运维：**先 mount 再启容器**（Docker 默认 `rprivate` 传播，容器起来后再 mount 不可见）；
   若需运行期 catch mount 则用 `:rslave`。
 - systemd unit + `Restart=always`；cuefs 挂了挂载点会 hang。
