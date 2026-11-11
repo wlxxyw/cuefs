@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（必须已存在，例如 v0.2.0）'
+        required: true
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: https://gitea.com/actions/checkout@v4
+
+      - name: Set up Go
+        uses: https://gitea.com/actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build (linux/amd64)
+        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/cuefs-linux-amd64 ./cmd/cuefs
+
+      - name: Build (linux/arm64)
+        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/cuefs-linux-arm64 ./cmd/cuefs
+
+      - name: Build (linux/arm)
+        run: GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/cuefs-linux-arm ./cmd/cuefs
+
+      - name: Release
+        uses: https://gitea.com/actions/gitea-release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |-
+            dist/cuefs-linux-amd64
+            dist/cuefs-linux-arm64
+            dist/cuefs-linux-arm
+          sha256sum: true
